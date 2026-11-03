@@ -1,0 +1,115 @@
+# name: test/sql/optimizer/test_constant_groups_optimizer.test
+# description: Constant GROUP BY keys are dropped while another key survives and the results stay the same
+# group: [optimizer]
+
+statement ok
+SET default_null_order='nulls_last';
+
+statement ok
+CREATE TABLE t AS SELECT * FROM (VALUES (1, 'a', 10), (1, 'b', 20), (2, 'a', 30), (NULL, 'c', 40), (2, NULL, 50)) t(x, s, v)
+
+query IIII
+SELECT 1 AS one, x, count(*), sum(v) FROM t GROUP BY 1, x ORDER BY x
+----
+1	1	2	30
+1	2	2	80
+1	NULL	1	40
+
+query IIII
+SELECT x, 'k', 42, count(*) FROM t GROUP BY 1, 2, 3 ORDER BY x
+----
+1	k	42	2
+2	k	42	2
+NULL	k	42	1
+
+query III
+SELECT NULL AS n, x, count(*) FROM t GROUP BY 1, x ORDER BY x
+----
+NULL	1	2
+NULL	2	2
+NULL	NULL	1
+
+query III
+SELECT NULL::INTEGER + 1 AS n, s, sum(v) FROM t GROUP BY 1, s ORDER BY s
+----
+NULL	a	40
+NULL	b	20
+NULL	c	40
+NULL	NULL	50
+
+query III
+SELECT 1, x, count(*) FROM t WHERE v < 0 GROUP BY 1, x
+----
+
+query II
+SELECT 1, count(*) FROM t GROUP BY 1
+----
+1	5
+
+query II
+SELECT 1, count(*) FROM t WHERE v < 0 GROUP BY 1
+----
+
+query III
+SELECT 1, x, count(*) FROM t GROUP BY ROLLUP (1, x) ORDER BY ALL
+----
+1	1	2
+1	2	2
+1	NULL	1
+1	NULL	5
+NULL	NULL	5
+
+query III
+SELECT 1, x, count(*) FROM t GROUP BY GROUPING SETS ((1, x), (x), ()) ORDER BY ALL
+----
+1	1	2
+1	2	2
+1	NULL	1
+NULL	1	2
+NULL	2	2
+NULL	NULL	1
+NULL	NULL	5
+
+query IIII
+SELECT 1, x, GROUPING(1), count(*) FROM t GROUP BY 1, x ORDER BY x
+----
+1	1	0	2
+1	2	0	2
+1	NULL	0	1
+
+query II
+EXPLAIN SELECT 1, x, count(*) FROM t GROUP BY 1, x
+----
+physical_plan	<REGEX>:.*Groups: #0\s+│.*
+
+statement ok
+CREATE TABLE expected AS SELECT * FROM (
+	SELECT 'q1' AS q, 1::VARCHAR AS c, x::VARCHAR AS k, count(*) AS n FROM t GROUP BY 1, x, 2
+	UNION ALL SELECT 'q2', 'z', s, sum(v) FROM t GROUP BY 1, 2, 3, s
+	UNION ALL SELECT 'q3', NULL, x::VARCHAR, count(*) FROM t GROUP BY 1, 2, 3, x
+)
+
+statement ok
+SET disabled_optimizers='duplicate_groups'
+
+statement ok
+CREATE TABLE stock AS SELECT * FROM (
+	SELECT 'q1' AS q, 1::VARCHAR AS c, x::VARCHAR AS k, count(*) AS n FROM t GROUP BY 1, x, 2
+	UNION ALL SELECT 'q2', 'z', s, sum(v) FROM t GROUP BY 1, 2, 3, s
+	UNION ALL SELECT 'q3', NULL, x::VARCHAR, count(*) FROM t GROUP BY 1, 2, 3, x
+)
+
+query I
+SELECT count(*) FROM (SELECT * FROM expected EXCEPT ALL SELECT * FROM stock)
+----
+0
+
+query I
+SELECT count(*) FROM (SELECT * FROM stock EXCEPT ALL SELECT * FROM expected)
+----
+0
+
+query I
+SELECT count(*) FROM stock
+----
+10

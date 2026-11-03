@@ -97,6 +97,31 @@ void CollectGroupRemovals(const LogicalAggregate &aggr, vector<GroupRemoval> &re
 		removals.push_back({group_idx, base_it->second, nullptr});
 		any_derived = true;
 	}
+
+	vector<bool> already_removed(groups.size(), false);
+	for (auto &removal : removals) {
+		already_removed[removal.removed_idx.GetIndex()] = true;
+	}
+	vector<ProjectionIndex> constant_groups;
+	optional_idx surviving_group;
+	for (auto group_idx : ProjectionIndex::GetIndexes(groups.size())) {
+		if (already_removed[group_idx.GetIndex()]) {
+			continue;
+		}
+		const auto &group = groups[group_idx];
+		if (group->GetExpressionType() == ExpressionType::VALUE_CONSTANT) {
+			constant_groups.push_back(group_idx);
+		} else if (!surviving_group.IsValid()) {
+			surviving_group = group_idx.GetIndex();
+		}
+	}
+	if (!surviving_group.IsValid()) {
+		return;
+	}
+	for (auto group_idx : constant_groups) {
+		removals.push_back({group_idx, ProjectionIndex(surviving_group.GetIndex()), nullptr});
+		any_derived = true;
+	}
 }
 
 // Compacts survivors, fixes grouping sets, and fills group_binding_map with the pre/post-shift
@@ -183,11 +208,13 @@ BuildDerivedProjection(LogicalAggregate &aggr, idx_t num_original_groups, idx_t 
 		if (!r.derived_expr) {
 			continue;
 		}
-		auto base_post = group_binding_map.at(ColumnBinding(original_group_index, r.target_idx));
-		const auto &base_source = aggr.groups[base_post.column_index]->Cast<BoundColumnRefExpression>().Binding();
-		rebinder.replacement_bindings.clear();
-		rebinder.replacement_bindings.emplace_back(base_source, base_post);
-		rebinder.VisitExpression(&r.derived_expr);
+		if (r.derived_expr->GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
+			auto base_post = group_binding_map.at(ColumnBinding(original_group_index, r.target_idx));
+			const auto &base_source = aggr.groups[base_post.column_index]->Cast<BoundColumnRefExpression>().Binding();
+			rebinder.replacement_bindings.clear();
+			rebinder.replacement_bindings.emplace_back(base_source, base_post);
+			rebinder.VisitExpression(&r.derived_expr);
+		}
 		select_list[r.removed_idx.GetIndex()] = std::move(r.derived_expr);
 	}
 
