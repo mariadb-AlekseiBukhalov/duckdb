@@ -1,6 +1,9 @@
 #include "duckdb/optimizer/topn_optimizer.hpp"
 
 #include "duckdb/common/limits.hpp"
+#include "duckdb/common/operator/add.hpp"
+#include "duckdb/planner/operator/logical_aggregate.hpp"
+#include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_limit.hpp"
 #include "duckdb/planner/operator/logical_order.hpp"
@@ -156,6 +159,102 @@ void TopN::PushdownDynamicFilters(LogicalTopN &op) {
 	}
 }
 
+void TopN::PushdownLimitedAggregateFilter(LogicalLimit &op) {
+	static constexpr idx_t MAX_LIMITED_AGGREGATE_FILTER_LIMIT = 10000;
+	if (op.limit_val.Type() != LimitNodeType::CONSTANT_VALUE) {
+		return;
+	}
+	idx_t total = op.limit_val.GetConstantValue();
+	if (op.offset_val.Type() == LimitNodeType::CONSTANT_VALUE) {
+		if (!TryAddOperator::Operation(total, op.offset_val.GetConstantValue(), total)) {
+			return;
+		}
+	} else if (op.offset_val.Type() != LimitNodeType::UNSET) {
+		return;
+	}
+	if (total == 0 || total > MAX_LIMITED_AGGREGATE_FILTER_LIMIT) {
+		return;
+	}
+	auto *child = op.children[0].get();
+	while (child->type == LogicalOperatorType::LOGICAL_PROJECTION) {
+		child = child->children[0].get();
+	}
+	if (child->type != LogicalOperatorType::LOGICAL_AGGREGATE_AND_GROUP_BY) {
+		return;
+	}
+	auto &aggregate = child->Cast<LogicalAggregate>();
+	if (aggregate.limit_filter || aggregate.groups.empty() || !aggregate.grouping_functions.empty()) {
+		return;
+	}
+	if (aggregate.grouping_sets.size() > 1 ||
+	    (aggregate.grouping_sets.size() == 1 && aggregate.grouping_sets[0].size() != aggregate.groups.size())) {
+		return;
+	}
+	for (auto &expr : aggregate.expressions) {
+		if (expr->GetExpressionType() != ExpressionType::BOUND_AGGREGATE) {
+			return;
+		}
+		auto &aggr = expr->Cast<BoundAggregateExpression>();
+		if (aggr.IsDistinct() || aggr.GetFilter() || aggr.GetOrderBys()) {
+			return;
+		}
+	}
+	auto &group = aggregate.groups[0];
+	auto &type = group->GetReturnType();
+	switch (type.InternalType()) {
+	case PhysicalType::INT8:
+	case PhysicalType::INT16:
+	case PhysicalType::INT32:
+	case PhysicalType::INT64:
+	case PhysicalType::UINT8:
+	case PhysicalType::UINT16:
+	case PhysicalType::UINT32:
+		break;
+	default:
+		return;
+	}
+	if (type.id() == LogicalTypeId::DECIMAL || type.id() == LogicalTypeId::ENUM ||
+	    type.id() == LogicalTypeId::BOOLEAN || type.IsNested()) {
+		return;
+	}
+
+	vector<JoinFilterPushdownColumn> columns;
+	JoinFilterPushdownColumn column;
+	column.probe_column_index = ColumnBinding(aggregate.group_index, ProjectionIndex(0));
+	columns.emplace_back(column);
+	vector<PushdownFilterTarget> pushdown_targets;
+	JoinFilterPushdownOptimizer::GetPushdownFilterTargets(aggregate, std::move(columns), pushdown_targets);
+	if (pushdown_targets.empty()) {
+		return;
+	}
+	for (auto &target : pushdown_targets) {
+		auto &pushed_column = target.columns[0];
+		if (pushed_column.mode != JoinFilterPushdownMode::RECONSTRUCT_EXPRESSION ||
+		    RuntimeFilterCastUtil::RuntimeFilterUsesTryCast(pushed_column) ||
+		    RuntimeFilterCastUtil::GetRuntimeFilterInputType(pushed_column, type) != type) {
+			return;
+		}
+	}
+	auto filter_data =
+	    make_shared_ptr<DynamicFilterData>(ExpressionType::COMPARE_LESSTHANOREQUALTO, Value::MinimumValue(type));
+	for (auto &target : pushdown_targets) {
+		auto &get = target.get;
+		auto &pushed_column = target.columns[0];
+		auto col_binding = pushed_column.probe_column_index;
+		bool preserves_cast_errors = false;
+		auto filter_input =
+		    RuntimeFilterCastUtil::CreateRuntimeFilterInputExpression(context, pushed_column, preserves_cast_errors);
+		D_ASSERT(filter_input->GetReturnType() == type);
+		D_ASSERT(!preserves_cast_errors);
+		auto pushed_expr = CreateDynamicFilterExpression(filter_data, type, filter_input->Copy());
+		get.table_filters.PushFilter(col_binding.column_index,
+		                             make_uniq<ExpressionFilter>(CreateOptionalFilterExpression(
+		                                 std::move(pushed_expr), pushed_column.storage_type)));
+	}
+	aggregate.limit_filter = std::move(filter_data);
+	aggregate.limit_filter_group = group->Copy();
+}
+
 unique_ptr<LogicalOperator> TopN::Optimize(unique_ptr<LogicalOperator> op) {
 	if (CanOptimize(*op, &context)) {
 		vector<unique_ptr<LogicalOperator>> projections;
@@ -203,6 +302,9 @@ unique_ptr<LogicalOperator> TopN::Optimize(unique_ptr<LogicalOperator> op) {
 	}
 	if (op->type == LogicalOperatorType::LOGICAL_TOP_N) {
 		PushdownDynamicFilters(op->Cast<LogicalTopN>());
+	}
+	if (op->type == LogicalOperatorType::LOGICAL_LIMIT) {
+		PushdownLimitedAggregateFilter(op->Cast<LogicalLimit>());
 	}
 
 	for (auto &child : op->children) {

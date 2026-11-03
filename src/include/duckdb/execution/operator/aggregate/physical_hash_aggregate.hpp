@@ -17,6 +17,8 @@
 
 namespace duckdb {
 
+struct DynamicFilterData;
+
 class ClientContext;
 class BufferManager;
 class PhysicalHashAggregate;
@@ -89,6 +91,8 @@ public:
 	unsafe_vector<idx_t> distinct_filter;
 
 	reference_map_t<const Expression, size_t> filter_indexes;
+
+	shared_ptr<DynamicFilterData> limit_filter;
 
 public:
 	// Source interface

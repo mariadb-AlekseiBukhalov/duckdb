@@ -10,6 +10,7 @@
 #include "duckdb/execution/physical_plan_generator.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/main/config.hpp"
+#include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/operator/logical_limit.hpp"
 
 namespace duckdb {
@@ -86,8 +87,17 @@ static bool CanUseLimitedDistinct(const PhysicalHashAggregate &hash_aggregate) {
 	if (!hash_aggregate.grouped_aggregate_data.GetGroupingFunctions().empty()) {
 		return false;
 	}
-	if (!hash_aggregate.grouped_aggregate_data.aggregates.empty()) {
+	if (hash_aggregate.distinct_collection_info) {
 		return false;
+	}
+	if (hash_aggregate.grouping_sets[0].size() != hash_aggregate.grouped_aggregate_data.groups.size()) {
+		return false;
+	}
+	for (auto &aggregate : hash_aggregate.grouped_aggregate_data.aggregates) {
+		auto &aggr = aggregate->Cast<BoundAggregateExpression>();
+		if (aggr.IsDistinct() || aggr.GetFilter() || aggr.GetOrderBys()) {
+			return false;
+		}
 	}
 	return true;
 }
@@ -99,6 +109,10 @@ static PhysicalOperator &CreateLimitedDistinct(PhysicalPlanGenerator &generator,
 	    hash_aggregate.types, std::move(hash_aggregate.grouped_aggregate_data.groups),
 	    std::move(hash_aggregate.grouped_aggregate_data.aggregates), limit, hash_aggregate.estimated_cardinality);
 	limited.children.push_back(hash_aggregate.children[0]);
+	auto &limited_distinct = limited.Cast<PhysicalLimitedDistinct>();
+	if (hash_aggregate.limit_filter && !limited_distinct.aggregates.empty()) {
+		limited_distinct.threshold_filter = hash_aggregate.limit_filter;
+	}
 	return limited;
 }
 

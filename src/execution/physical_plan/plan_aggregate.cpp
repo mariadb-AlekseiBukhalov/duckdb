@@ -303,9 +303,15 @@ PhysicalOperator &PhysicalPlanGenerator::CreatePlan(LogicalAggregate &op) {
 		return group_by;
 	}
 
+	shared_ptr<DynamicFilterData> limit_filter;
+	if (op.limit_filter && op.limit_filter_group && !op.groups.empty() &&
+	    op.groups[0]->Equals(*op.limit_filter_group)) {
+		limit_filter = op.limit_filter;
+	}
 	auto &group_by = Make<PhysicalHashAggregate>(context, op.types, std::move(op.expressions), std::move(op.groups),
 	                                             std::move(op.grouping_sets), std::move(op.grouping_functions),
 	                                             op.estimated_cardinality, group_validity, op.distinct_validity);
+	group_by.Cast<PhysicalHashAggregate>().limit_filter = std::move(limit_filter);
 	group_by.children.push_back(plan);
 	return group_by;
 }

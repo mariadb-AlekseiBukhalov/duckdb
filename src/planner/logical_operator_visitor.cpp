@@ -187,6 +187,9 @@ static void EnumerateOperatorExpressions(OPERATOR &op, const FUNC &callback) {
 		for (auto &group : aggr.groups) {
 			callback(&group);
 		}
+		if (aggr.limit_filter_group) {
+			callback(&aggr.limit_filter_group);
+		}
 		break;
 	}
 	case LogicalOperatorType::LOGICAL_MERGE_INTO: {

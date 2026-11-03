@@ -4,6 +4,9 @@
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/execution/operator/aggregate/aggregate_object.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/planner/filter/table_filter_functions.hpp"
+
+#include <queue>
 
 namespace duckdb {
 
@@ -46,11 +49,25 @@ struct LimitedDistinctGlobalSinkState : public GlobalSinkState {
 		auto payload_types = GetPayloadTypes(op.aggregates);
 		ht = make_uniq<GroupedAggregateHashTable>(context, BufferAllocator::Get(context), op.group_types, payload_types,
 		                                          aggregate_objects);
+		if (op.threshold_filter) {
+			op.threshold_filter->Reset();
+		} else if (!op.aggregates.empty()) {
+			keys = make_uniq<GroupedAggregateHashTable>(context, BufferAllocator::Get(context), op.group_types);
+			keys_frozen = op.limit == 0;
+		}
 	}
 
 	unique_ptr<GroupedAggregateHashTable> ht;
 	atomic<bool> limit_reached;
 	mutex combine_lock;
+
+	unique_ptr<GroupedAggregateHashTable> keys;
+	mutex keys_lock;
+	atomic<bool> keys_frozen {false};
+
+	atomic<bool> has_threshold {false};
+	atomic<int64_t> threshold {NumericLimits<int64_t>::Maximum()};
+	mutex threshold_lock;
 };
 
 struct LimitedDistinctLocalSinkState : public LocalSinkState {
@@ -84,6 +101,12 @@ struct LimitedDistinctLocalSinkState : public LocalSinkState {
 	ExpressionExecutor payload_executor;
 	DataChunk group_chunk;
 	DataChunk payload_chunk;
+	AggregateHTLookupState lookup_state;
+	SelectionVector found_sel {STANDARD_VECTOR_SIZE};
+	SelectionVector new_sel {STANDARD_VECTOR_SIZE};
+	Vector new_addresses {LogicalType::POINTER};
+	Vector key_addresses {LogicalType::POINTER};
+	std::priority_queue<int64_t> smallest_groups;
 };
 
 unique_ptr<GlobalSinkState> PhysicalLimitedDistinct::GetGlobalSinkState(ClientContext &context) const {
@@ -94,6 +117,180 @@ unique_ptr<LocalSinkState> PhysicalLimitedDistinct::GetLocalSinkState(ExecutionC
 	return make_uniq<LimitedDistinctLocalSinkState>(*this, context);
 }
 
+template <class T>
+static idx_t SelectAtMost(Vector &vector, idx_t count, int64_t bound, SelectionVector &sel) {
+	UnifiedVectorFormat format;
+	vector.ToUnifiedFormat(format);
+	const auto data = UnifiedVectorFormat::GetData<T>(format);
+	idx_t selected = 0;
+	for (idx_t i = 0; i < count; i++) {
+		const auto index = format.sel->get_index(i);
+		if (format.validity.RowIsValid(index) && static_cast<int64_t>(data[index]) <= bound) {
+			sel.set_index(selected++, i);
+		}
+	}
+	return selected;
+}
+
+static idx_t SelectAtMost(Vector &vector, idx_t count, int64_t bound, SelectionVector &sel) {
+	switch (vector.GetType().InternalType()) {
+	case PhysicalType::INT8:
+		return SelectAtMost<int8_t>(vector, count, bound, sel);
+	case PhysicalType::INT16:
+		return SelectAtMost<int16_t>(vector, count, bound, sel);
+	case PhysicalType::INT32:
+		return SelectAtMost<int32_t>(vector, count, bound, sel);
+	case PhysicalType::INT64:
+		return SelectAtMost<int64_t>(vector, count, bound, sel);
+	case PhysicalType::UINT8:
+		return SelectAtMost<uint8_t>(vector, count, bound, sel);
+	case PhysicalType::UINT16:
+		return SelectAtMost<uint16_t>(vector, count, bound, sel);
+	case PhysicalType::UINT32:
+		return SelectAtMost<uint32_t>(vector, count, bound, sel);
+	default:
+		throw InternalException("Unsupported type for the limited aggregate threshold");
+	}
+}
+
+template <class T>
+static void OfferGroupValues(Vector &vector, idx_t count, const SelectionVector &rows, idx_t row_count, idx_t limit,
+                             std::priority_queue<int64_t> &heap) {
+	UnifiedVectorFormat format;
+	vector.ToUnifiedFormat(format);
+	const auto data = UnifiedVectorFormat::GetData<T>(format);
+	for (idx_t i = 0; i < row_count; i++) {
+		const auto index = format.sel->get_index(rows.get_index(i));
+		if (!format.validity.RowIsValid(index)) {
+			continue;
+		}
+		const auto value = static_cast<int64_t>(data[index]);
+		if (heap.size() < limit) {
+			heap.push(value);
+		} else if (value < heap.top()) {
+			heap.pop();
+			heap.push(value);
+		}
+	}
+}
+
+static void OfferGroupValues(Vector &vector, idx_t count, const SelectionVector &rows, idx_t row_count, idx_t limit,
+                             std::priority_queue<int64_t> &heap) {
+	switch (vector.GetType().InternalType()) {
+	case PhysicalType::INT8:
+		return OfferGroupValues<int8_t>(vector, count, rows, row_count, limit, heap);
+	case PhysicalType::INT16:
+		return OfferGroupValues<int16_t>(vector, count, rows, row_count, limit, heap);
+	case PhysicalType::INT32:
+		return OfferGroupValues<int32_t>(vector, count, rows, row_count, limit, heap);
+	case PhysicalType::INT64:
+		return OfferGroupValues<int64_t>(vector, count, rows, row_count, limit, heap);
+	case PhysicalType::UINT8:
+		return OfferGroupValues<uint8_t>(vector, count, rows, row_count, limit, heap);
+	case PhysicalType::UINT16:
+		return OfferGroupValues<uint16_t>(vector, count, rows, row_count, limit, heap);
+	case PhysicalType::UINT32:
+		return OfferGroupValues<uint32_t>(vector, count, rows, row_count, limit, heap);
+	default:
+		throw InternalException("Unsupported type for the limited aggregate threshold");
+	}
+}
+
+SinkResultType PhysicalLimitedDistinct::SinkThresholdAggregates(DataChunk &chunk,
+                                                                LimitedDistinctGlobalSinkState &gstate,
+                                                                LimitedDistinctLocalSinkState &lstate) const {
+	const auto count = chunk.size();
+	lstate.group_chunk.Reset();
+	lstate.group_executor.Execute(chunk, lstate.group_chunk);
+	const bool has_payload = lstate.payload_chunk.ColumnCount() > 0;
+	if (has_payload) {
+		lstate.payload_chunk.Reset();
+		lstate.payload_executor.Execute(chunk, lstate.payload_chunk);
+	} else {
+		lstate.payload_chunk.SetChildCardinality(count);
+	}
+
+	if (gstate.has_threshold.load(std::memory_order_acquire)) {
+		const auto bound = gstate.threshold.load(std::memory_order_relaxed);
+		const auto selected = SelectAtMost(lstate.group_chunk.data[0], count, bound, lstate.found_sel);
+		if (selected == 0) {
+			return SinkResultType::NEED_MORE_INPUT;
+		}
+		if (selected != count) {
+			lstate.group_chunk.Slice(lstate.found_sel, selected);
+			lstate.payload_chunk.Slice(lstate.found_sel, selected);
+		}
+	}
+
+	const auto new_groups = lstate.ht->AddChunkAndGetNewGroups(
+	    lstate.group_chunk, lstate.payload_chunk, AggregateType::NON_DISTINCT, lstate.new_addresses, lstate.new_sel);
+	if (new_groups == 0) {
+		return SinkResultType::NEED_MORE_INPUT;
+	}
+	OfferGroupValues(lstate.group_chunk.data[0], lstate.group_chunk.size(), lstate.new_sel, new_groups, limit,
+	                 lstate.smallest_groups);
+	if (lstate.smallest_groups.size() < limit) {
+		return SinkResultType::NEED_MORE_INPUT;
+	}
+	const auto local_bound = lstate.smallest_groups.top();
+	if (gstate.has_threshold.load(std::memory_order_acquire) &&
+	    local_bound >= gstate.threshold.load(std::memory_order_relaxed)) {
+		return SinkResultType::NEED_MORE_INPUT;
+	}
+	lock_guard<mutex> guard(gstate.threshold_lock);
+	if (gstate.has_threshold.load(std::memory_order_relaxed) &&
+	    local_bound >= gstate.threshold.load(std::memory_order_relaxed)) {
+		return SinkResultType::NEED_MORE_INPUT;
+	}
+	gstate.threshold.store(local_bound, std::memory_order_relaxed);
+	gstate.has_threshold.store(true, std::memory_order_release);
+	threshold_filter->SetValue(Value::Numeric(group_types[0], local_bound));
+	return SinkResultType::NEED_MORE_INPUT;
+}
+
+SinkResultType PhysicalLimitedDistinct::SinkExactAggregates(DataChunk &chunk, LimitedDistinctGlobalSinkState &gstate,
+                                                            LimitedDistinctLocalSinkState &lstate) const {
+	const auto count = chunk.size();
+	lstate.group_chunk.Reset();
+	lstate.group_executor.Execute(chunk, lstate.group_chunk);
+	const bool has_payload = lstate.payload_chunk.ColumnCount() > 0;
+	if (has_payload) {
+		lstate.payload_chunk.Reset();
+		lstate.payload_executor.Execute(chunk, lstate.payload_chunk);
+	} else {
+		lstate.payload_chunk.SetChildCardinality(count);
+	}
+
+	if (gstate.keys_frozen.load(std::memory_order_acquire)) {
+		const auto found = gstate.keys->LookupGroups(lstate.group_chunk, lstate.lookup_state, lstate.found_sel);
+		if (found == 0) {
+			return SinkResultType::NEED_MORE_INPUT;
+		}
+		if (found != count) {
+			lstate.group_chunk.Slice(lstate.found_sel, found);
+			lstate.payload_chunk.Slice(lstate.found_sel, found);
+		}
+		lstate.ht->AddChunk(lstate.group_chunk, lstate.payload_chunk, AggregateType::NON_DISTINCT);
+		return SinkResultType::NEED_MORE_INPUT;
+	}
+
+	const auto new_groups = lstate.ht->AddChunkAndGetNewGroups(
+	    lstate.group_chunk, lstate.payload_chunk, AggregateType::NON_DISTINCT, lstate.new_addresses, lstate.new_sel);
+	if (new_groups == 0) {
+		return SinkResultType::NEED_MORE_INPUT;
+	}
+	lock_guard<mutex> guard(gstate.keys_lock);
+	if (gstate.keys_frozen.load(std::memory_order_relaxed)) {
+		return SinkResultType::NEED_MORE_INPUT;
+	}
+	lstate.group_chunk.Slice(lstate.new_sel, new_groups);
+	gstate.keys->FindOrCreateGroups(lstate.group_chunk, lstate.key_addresses);
+	if (gstate.keys->Count() >= limit) {
+		gstate.keys_frozen.store(true, std::memory_order_release);
+	}
+	return SinkResultType::NEED_MORE_INPUT;
+}
+
 SinkResultType PhysicalLimitedDistinct::Sink(ExecutionContext &context, DataChunk &chunk,
                                              OperatorSinkInput &input) const {
 	auto &gstate = input.global_state.Cast<LimitedDistinctGlobalSinkState>();
@@ -101,6 +298,13 @@ SinkResultType PhysicalLimitedDistinct::Sink(ExecutionContext &context, DataChun
 
 	if (limit == 0) {
 		return SinkResultType::FINISHED;
+	}
+
+	if (threshold_filter) {
+		return SinkThresholdAggregates(chunk, gstate, lstate);
+	}
+	if (!aggregates.empty()) {
+		return SinkExactAggregates(chunk, gstate, lstate);
 	}
 
 	if (gstate.limit_reached) {
@@ -170,6 +374,8 @@ struct LimitedDistinctGlobalSourceState : public GlobalSourceState {
 	}
 
 	AggregateHTScanState scan_state;
+	AggregateHTLookupState lookup_state;
+	SelectionVector found_sel {STANDARD_VECTOR_SIZE};
 	bool initialized;
 	const idx_t total_rows;
 	atomic<idx_t> rows_scanned;
@@ -218,6 +424,26 @@ SourceResultType PhysicalLimitedDistinct::GetDataInternal(ExecutionContext &cont
 		}
 		// Aggregate hash table scan returns "has more" when advancing between partitions, even if the current
 		// output chunk is empty. Keep scanning until we either see rows or exhaust the partitions.
+		if (gstate_source.group_chunk.size() > 0 && threshold_filter &&
+		    gstate_sink.has_threshold.load(std::memory_order_acquire)) {
+			const auto before = gstate_source.group_chunk.size();
+			const auto selected =
+			    SelectAtMost(gstate_source.group_chunk.data[0], before,
+			                 gstate_sink.threshold.load(std::memory_order_relaxed), gstate_source.found_sel);
+			if (selected != before) {
+				gstate_source.group_chunk.Slice(gstate_source.found_sel, selected);
+				gstate_source.payload_chunk.Slice(gstate_source.found_sel, selected);
+			}
+		}
+		if (gstate_source.group_chunk.size() > 0 && gstate_sink.keys) {
+			const auto before = gstate_source.group_chunk.size();
+			const auto found = gstate_sink.keys->LookupGroups(gstate_source.group_chunk, gstate_source.lookup_state,
+			                                                  gstate_source.found_sel);
+			if (found != before) {
+				gstate_source.group_chunk.Slice(gstate_source.found_sel, found);
+				gstate_source.payload_chunk.Slice(gstate_source.found_sel, found);
+			}
+		}
 		if (gstate_source.group_chunk.size() > 0) {
 			break;
 		}

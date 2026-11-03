@@ -778,8 +778,9 @@ void GroupedAggregateHashTable::FetchAggregates(DataChunk &groups, DataChunk &re
 #ifdef DEBUG
 	groups.Verify(context.db);
 	D_ASSERT(groups.ColumnCount() + 1 == layout_ptr->ColumnCount());
+	D_ASSERT(result.ColumnCount() == layout_ptr->GetAggregates().size());
 	for (idx_t i = 0; i < result.ColumnCount(); i++) {
-		D_ASSERT(result.data[i].GetType() == payload_types[i]);
+		D_ASSERT(result.data[i].GetType().InternalType() == layout_ptr->GetAggregates()[i].return_type);
 	}
 #endif
 

@@ -15,6 +15,7 @@ namespace duckdb {
 class ClientContext;
 class LogicalOperator;
 class LogicalTopN;
+class LogicalLimit;
 class Optimizer;
 
 class TopN {
@@ -28,6 +29,7 @@ public:
 
 private:
 	void PushdownDynamicFilters(LogicalTopN &op);
+	void PushdownLimitedAggregateFilter(LogicalLimit &op);
 
 private:
 	ClientContext &context;

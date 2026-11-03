@@ -12,6 +12,10 @@
 
 namespace duckdb {
 
+struct DynamicFilterData;
+struct LimitedDistinctGlobalSinkState;
+struct LimitedDistinctLocalSinkState;
+
 //! PhysicalLimitedDistinct implements DISTINCT ... LIMIT N or GROUP BY ... LIMIT N
 //! using a hash table with early termination once enough distinct groups are found.
 class PhysicalLimitedDistinct : public PhysicalOperator {
@@ -31,6 +35,7 @@ public:
 	vector<LogicalType> group_types;
 	//! The maximum number of distinct groups to collect (includes offset, enforced by LIMIT on top)
 	idx_t limit;
+	shared_ptr<DynamicFilterData> threshold_filter;
 
 public:
 	// Source interface
@@ -73,11 +78,17 @@ public:
 		return false;
 	}
 	PipelineSourceConsumption GetSourceConsumption() const override {
-		return PipelineSourceConsumption::MAY_STOP_EARLY;
+		return aggregates.empty() ? PipelineSourceConsumption::MAY_STOP_EARLY : PipelineSourceConsumption::ALL_INPUT;
 	}
 
 public:
 	InsertionOrderPreservingMap<string> ParamsToString() const override;
+
+private:
+	SinkResultType SinkExactAggregates(DataChunk &chunk, LimitedDistinctGlobalSinkState &gstate,
+	                                   LimitedDistinctLocalSinkState &lstate) const;
+	SinkResultType SinkThresholdAggregates(DataChunk &chunk, LimitedDistinctGlobalSinkState &gstate,
+	                                       LimitedDistinctLocalSinkState &lstate) const;
 };
 
 } // namespace duckdb

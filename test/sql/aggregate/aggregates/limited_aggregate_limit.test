@@ -1,0 +1,2332 @@
+# name: test/sql/aggregate/aggregates/limited_aggregate_limit.test
+# description: GROUP BY with aggregates and LIMIT without ORDER BY returns exact aggregates for every returned group
+# group: [aggregates]
+
+statement ok
+PRAGMA threads=4
+
+statement ok
+SET profiling_renderer_settings = MAP {'operator_casing': 'upper'};
+
+statement ok
+CREATE TABLE t AS SELECT
+  CASE WHEN i % 97 = 0 THEN NULL ELSE (hash(i) % 20000)::BIGINT END AS a,
+  CASE WHEN i % 53 = 0 THEN NULL ELSE 'p' || (hash(i * 7) % 40)::VARCHAR END AS b,
+  (i % 1000)::INTEGER AS c,
+  i::BIGINT AS v
+FROM range(400000) t(i)
+
+statement ok
+CREATE TABLE t_few AS SELECT (i % 7)::INTEGER AS a, 'x' AS b, (i % 10)::INTEGER AS c, i::BIGINT AS v FROM range(100000) t(i)
+
+statement ok
+CREATE TABLE t_null_key AS SELECT NULL::INTEGER AS a, 'x' AS b, 1 AS c, i::BIGINT AS v FROM range(50000) t(i)
+
+statement ok
+CREATE TABLE t_neg AS SELECT ((hash(i) % 200000)::BIGINT - 100000) AS a, (i % 7)::INTEGER AS b, 1 AS c, i::BIGINT AS v FROM range(300000) t(i)
+
+query II
+EXPLAIN SELECT a, b, count(*) AS n, sum(v) AS s FROM t GROUP BY a, b LIMIT 10
+----
+physical_plan	<REGEX>:.*LIMITED_DISTINCT.*
+
+query II
+EXPLAIN SELECT a, b, count(*) AS n, sum(v) AS s FROM t GROUP BY a, b ORDER BY a LIMIT 10
+----
+physical_plan	<REGEX>:.*TOP_N.*
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT a, b, count(*) AS n, sum(v) AS s, min(v) AS mn, max(c) AS mx FROM t GROUP BY a, b
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT a, b, count(*) AS n, sum(v) AS s, min(v) AS mn, max(c) AS mx FROM t GROUP BY a, b LIMIT 10
+
+query I
+SELECT count(*) FROM r
+----
+10
+
+query I
+SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.a IS NOT DISTINCT FROM f.a AND r.b IS NOT DISTINCT FROM f.b AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s)
+----
+0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT a, b, count(*) AS n, sum(v) AS s, min(v) AS mn, max(c) AS mx FROM t GROUP BY a, b
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT a, b, count(*) AS n, sum(v) AS s, min(v) AS mn, max(c) AS mx FROM t GROUP BY a, b LIMIT 1
+
+query I
+SELECT count(*) FROM r
+----
+1
+
+query I
+SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.a IS NOT DISTINCT FROM f.a AND r.b IS NOT DISTINCT FROM f.b AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s)
+----
+0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT a, b, count(*) AS n, sum(v) AS s, min(v) AS mn, max(c) AS mx FROM t GROUP BY a, b
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT a, b, count(*) AS n, sum(v) AS s, min(v) AS mn, max(c) AS mx FROM t GROUP BY a, b LIMIT 0
+
+query I
+SELECT count(*) FROM r
+----
+0
+
+query I
+SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.a IS NOT DISTINCT FROM f.a AND r.b IS NOT DISTINCT FROM f.b AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s)
+----
+0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT a, b, count(*) AS n, sum(v) AS s, min(v) AS mn, max(c) AS mx FROM t GROUP BY a, b
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT a, b, count(*) AS n, sum(v) AS s, min(v) AS mn, max(c) AS mx FROM t GROUP BY a, b LIMIT 3000
+
+query I
+SELECT count(*) FROM r
+----
+3000
+
+query I
+SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.a IS NOT DISTINCT FROM f.a AND r.b IS NOT DISTINCT FROM f.b AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s)
+----
+0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT a, b, count(*) AS n, sum(v) AS s, min(v) AS mn, max(c) AS mx FROM t GROUP BY a, b
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT a, b, count(*) AS n, sum(v) AS s, min(v) AS mn, max(c) AS mx FROM t GROUP BY a, b LIMIT 10 OFFSET 7
+
+query I
+SELECT count(*) FROM r
+----
+10
+
+query I
+SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.a IS NOT DISTINCT FROM f.a AND r.b IS NOT DISTINCT FROM f.b AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s)
+----
+0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT a, b, count(*) AS n, sum(v) AS s, min(v) AS mn, max(c) AS mx FROM t GROUP BY a, b
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT a, b, count(*) AS n, sum(v) AS s, min(v) AS mn, max(c) AS mx FROM t GROUP BY a, b LIMIT 10 OFFSET 100000
+
+query I
+SELECT count(*) FROM r
+----
+10
+
+query I
+SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.a IS NOT DISTINCT FROM f.a AND r.b IS NOT DISTINCT FROM f.b AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s)
+----
+0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT b, count(*) AS n, sum(v) AS s FROM t GROUP BY b
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT b, count(*) AS n, sum(v) AS s FROM t GROUP BY b LIMIT 3
+
+query I
+SELECT count(*) FROM r
+----
+3
+
+query I
+SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.b IS NOT DISTINCT FROM f.b AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s)
+----
+0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT b, count(*) AS n, sum(v) AS s FROM t GROUP BY b
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT b, count(*) AS n, sum(v) AS s FROM t GROUP BY b LIMIT 100
+
+query I
+SELECT count(*) FROM r
+----
+41
+
+query I
+SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.b IS NOT DISTINCT FROM f.b AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s)
+----
+0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT a, count(*) AS n, sum(v) AS s FROM t_few GROUP BY a
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT a, count(*) AS n, sum(v) AS s FROM t_few GROUP BY a LIMIT 10
+
+query I
+SELECT count(*) FROM r
+----
+7
+
+query I
+SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.a IS NOT DISTINCT FROM f.a AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s)
+----
+0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT a, count(*) AS n, sum(v) AS s FROM t_few GROUP BY a
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT a, count(*) AS n, sum(v) AS s FROM t_few GROUP BY a LIMIT 3
+
+query I
+SELECT count(*) FROM r
+----
+3
+
+query I
+SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.a IS NOT DISTINCT FROM f.a AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s)
+----
+0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT a, count(*) AS n, sum(v) AS s FROM t_few GROUP BY a
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT a, count(*) AS n, sum(v) AS s FROM t_few GROUP BY a LIMIT 10 OFFSET 5
+
+query I
+SELECT count(*) FROM r
+----
+2
+
+query I
+SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.a IS NOT DISTINCT FROM f.a AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s)
+----
+0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT a, count(*) AS n, sum(v) AS s FROM t_null_key GROUP BY a
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT a, count(*) AS n, sum(v) AS s FROM t_null_key GROUP BY a LIMIT 10
+
+query I
+SELECT count(*) FROM r
+----
+1
+
+query I
+SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.a IS NOT DISTINCT FROM f.a AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s)
+----
+0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT a, b, count(*) AS n, sum(v) AS s FROM t_neg GROUP BY a, b
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT a, b, count(*) AS n, sum(v) AS s FROM t_neg GROUP BY a, b LIMIT 10
+
+query I
+SELECT count(*) FROM r
+----
+10
+
+query I
+SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.a = f.a AND r.b = f.b AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s)
+----
+0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT a, b, count(*) AS n, sum(v) AS s FROM t_neg GROUP BY a, b
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT a, b, count(*) AS n, sum(v) AS s FROM t_neg GROUP BY a, b LIMIT 1000
+
+query I
+SELECT count(*) FROM r
+----
+1000
+
+query I
+SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.a = f.a AND r.b = f.b AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s)
+----
+0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT b, a, count(*) AS n, sum(v) AS s FROM t_neg GROUP BY b, a
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT b, a, count(*) AS n, sum(v) AS s FROM t_neg GROUP BY b, a LIMIT 10
+
+query I
+SELECT count(*) FROM r
+----
+10
+
+query I
+SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.a = f.a AND r.b = f.b AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s)
+----
+0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT a, b, count(*) AS n, sum(v) AS s FROM t_neg WHERE c = 1 GROUP BY a, b HAVING count(*) >= 2
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT a, b, count(*) AS n, sum(v) AS s FROM t_neg WHERE c = 1 GROUP BY a, b HAVING count(*) >= 2 LIMIT 10
+
+query I
+SELECT count(*) FROM r
+----
+10
+
+query I
+SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.a = f.a AND r.b = f.b AND r.n = f.n AND r.s = f.s)
+----
+0
+
+statement ok
+PREPARE limited_prepared AS SELECT a, b, count(*) AS n, sum(v) AS s FROM t_neg GROUP BY a, b LIMIT $1
+
+statement ok
+EXECUTE limited_prepared(25)
+
+statement ok
+EXECUTE limited_prepared(3)
+
+statement ok
+EXECUTE limited_prepared(25)
+
+query I
+SELECT count(*) FROM (SELECT a, count(*) FROM t_neg GROUP BY GROUPING SETS ((a), ()) LIMIT 10)
+----
+10
+
+query I
+SELECT count(*) FROM (SELECT a, count(DISTINCT v) FROM t_neg GROUP BY a LIMIT 10)
+----
+10
+
+query I
+SELECT count(*) FROM (SELECT a, count(*) FILTER (WHERE v > 5) FROM t_neg GROUP BY a LIMIT 10)
+----
+10
+
+query I
+SELECT count(*) FROM (SELECT a, string_agg(b::VARCHAR, ',' ORDER BY v) FROM t_neg GROUP BY a LIMIT 10)
+----
+10
+
+# many groups in a VARCHAR key: the limit is always reached
+statement ok
+CREATE TABLE t_str_many AS SELECT (i // 3000)::INTEGER::VARCHAR AS k, i AS v FROM range(2000000) t(i)
+
+loop i 0 20
+
+query I
+SELECT count(*) FROM (SELECT k, count(*) FROM t_str_many GROUP BY k LIMIT 50)
+----
+50
+
+endloop
+
+
+statement ok
+CREATE TABLE empty_t (a BIGINT, v BIGINT)
+
+query I
+SELECT count(*) FROM (SELECT a, count(*), sum(v), first(v), list(v) FROM empty_t GROUP BY a LIMIT 5)
+----
+0
+
+query I
+SELECT count(*) FROM (SELECT a, count(*), sum(v) FROM t WHERE v < 0 GROUP BY a LIMIT 5)
+----
+0
+
+query I
+SELECT count(*) FROM (SELECT a, b, count(*), sum(v) FROM t WHERE v < 0 GROUP BY a, b LIMIT 5 OFFSET 2)
+----
+0
+
+statement ok
+CREATE TYPE mood AS ENUM ('m00','m01','m02','m03','m04','m05','m06','m07','m08','m09','m10','m11','m12','m13','m14','m15','m16','m17','m18','m19','m20','m21','m22','m23','m24','m25','m26','m27','m28','m29')
+
+statement ok
+CREATE TABLE tt AS SELECT
+  i::BIGINT AS v,
+  (i % 1000)::INTEGER AS c,
+  CASE WHEN i % 31 = 0 THEN NULL ELSE DATE '2020-01-01' + (i % 40)::INTEGER END AS d,
+  CASE WHEN i % 31 = 0 THEN NULL ELSE TIMESTAMP '2020-01-01 00:00:00' + to_hours(i % 40) END AS ts,
+  CASE WHEN i % 31 = 0 THEN NULL ELSE (18446744073709551615::UBIGINT - (i % 40)::UBIGINT * 1000003::UBIGINT) END AS u_high,
+  CASE WHEN i % 31 = 0 THEN NULL ELSE (9223372036854775808::UBIGINT + (i % 40)::UBIGINT) END AS u_mid,
+  CASE WHEN i % 31 = 0 THEN NULL ELSE ((i % 40) - 20)::DECIMAL(12,2) END AS dec,
+  CASE WHEN i % 31 = 0 THEN NULL ELSE (i % 40) % 2 = 0 END AS bo,
+  CASE WHEN i % 31 = 0 THEN NULL ELSE ('m' || lpad((i % 30)::VARCHAR, 2, '0'))::mood END AS en,
+  CASE WHEN i % 31 = 0 THEN NULL ELSE (((i % 40) - 20) * 100000)::INTEGER END AS neg,
+  CASE WHEN i % 31 = 0 THEN NULL ELSE ((i % 40) - 20)::TINYINT END AS ti,
+  CASE WHEN i % 31 = 0 THEN NULL ELSE (((i % 40) - 20) * 1000)::SMALLINT END AS si,
+  CASE WHEN i % 31 = 0 THEN NULL ELSE (200 + (i % 40))::UTINYINT END AS uti,
+  CASE WHEN i % 31 = 0 THEN NULL ELSE (4000000000 + (i % 40))::UINTEGER END AS ui,
+  CASE WHEN i % 31 = 0 THEN NULL ELSE ((i % 40) - 20)::BIGINT * 100000000000 END AS bi,
+  CASE WHEN i % 31 = 0 THEN NULL ELSE ((i % 40) - 20)::HUGEINT * 100000000000000000000::HUGEINT END AS hu,
+  CASE WHEN i % 31 = 0 THEN NULL ELSE TIME '00:00:00' + to_minutes(i % 40) END AS tm,
+  CASE WHEN i % 31 = 0 THEN NULL ELSE DATE '1900-01-01' + ((i % 40) * 500)::INTEGER END AS d_wide,
+  CASE WHEN i % 31 = 0 THEN NULL ELSE (10000 + (i % 40) * 100000000)::UINTEGER END AS ui_wide,
+  CASE WHEN i % 31 = 0 THEN NULL ELSE 9223372036854775808::UBIGINT + (i % 40)::UBIGINT * 100000000000000::UBIGINT END AS u_wide,
+  CASE WHEN i % 31 = 0 THEN NULL ELSE 'k' || lpad((i % 40)::VARCHAR, 2, '0') END AS s,
+  CASE WHEN i % 31 = 0 THEN NULL ELSE (i % 7)::INTEGER END AS g7
+FROM range(60000) t(i)
+
+query I
+SELECT count(*) FROM (SELECT d FROM tt GROUP BY d)
+----
+41
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT d, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY d
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT d, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY d LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT d FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.d IS NOT DISTINCT FROM f.d AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d IS NOT DISTINCT FROM r.d AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d IS NOT DISTINCT FROM r.d AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT d, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY d
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT d, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY d LIMIT 41
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(41, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT d FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.d IS NOT DISTINCT FROM f.d AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d IS NOT DISTINCT FROM r.d AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d IS NOT DISTINCT FROM r.d AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT d, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY d
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT d, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY d LIMIT 1041
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(1041, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT d FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.d IS NOT DISTINCT FROM f.d AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d IS NOT DISTINCT FROM r.d AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d IS NOT DISTINCT FROM r.d AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT d, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY d
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT d, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY d LIMIT 5 OFFSET 3
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(5, greatest((SELECT count(*) FROM f) - 3, 0)), (SELECT count(*) FROM (SELECT DISTINCT d FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.d IS NOT DISTINCT FROM f.d AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d IS NOT DISTINCT FROM r.d AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d IS NOT DISTINCT FROM r.d AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT d, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY d
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT d, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY d LIMIT 10 OFFSET 38
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(10, greatest((SELECT count(*) FROM f) - 38, 0)), (SELECT count(*) FROM (SELECT DISTINCT d FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.d IS NOT DISTINCT FROM f.d AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d IS NOT DISTINCT FROM r.d AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d IS NOT DISTINCT FROM r.d AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+query I
+SELECT count(*) FROM (SELECT ts FROM tt GROUP BY ts)
+----
+41
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT ts, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY ts
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT ts, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY ts LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT ts FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.ts IS NOT DISTINCT FROM f.ts AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ts IS NOT DISTINCT FROM r.ts AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ts IS NOT DISTINCT FROM r.ts AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT ts, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY ts
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT ts, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY ts LIMIT 41
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(41, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT ts FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.ts IS NOT DISTINCT FROM f.ts AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ts IS NOT DISTINCT FROM r.ts AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ts IS NOT DISTINCT FROM r.ts AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT ts, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY ts
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT ts, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY ts LIMIT 1041
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(1041, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT ts FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.ts IS NOT DISTINCT FROM f.ts AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ts IS NOT DISTINCT FROM r.ts AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ts IS NOT DISTINCT FROM r.ts AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT ts, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY ts
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT ts, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY ts LIMIT 5 OFFSET 3
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(5, greatest((SELECT count(*) FROM f) - 3, 0)), (SELECT count(*) FROM (SELECT DISTINCT ts FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.ts IS NOT DISTINCT FROM f.ts AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ts IS NOT DISTINCT FROM r.ts AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ts IS NOT DISTINCT FROM r.ts AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT ts, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY ts
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT ts, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY ts LIMIT 10 OFFSET 38
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(10, greatest((SELECT count(*) FROM f) - 38, 0)), (SELECT count(*) FROM (SELECT DISTINCT ts FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.ts IS NOT DISTINCT FROM f.ts AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ts IS NOT DISTINCT FROM r.ts AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ts IS NOT DISTINCT FROM r.ts AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+query I
+SELECT count(*) FROM (SELECT u_high FROM tt GROUP BY u_high)
+----
+41
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT u_high, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY u_high
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT u_high, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY u_high LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT u_high FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.u_high IS NOT DISTINCT FROM f.u_high AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_high IS NOT DISTINCT FROM r.u_high AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_high IS NOT DISTINCT FROM r.u_high AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT u_high, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY u_high
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT u_high, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY u_high LIMIT 41
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(41, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT u_high FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.u_high IS NOT DISTINCT FROM f.u_high AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_high IS NOT DISTINCT FROM r.u_high AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_high IS NOT DISTINCT FROM r.u_high AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT u_high, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY u_high
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT u_high, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY u_high LIMIT 1041
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(1041, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT u_high FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.u_high IS NOT DISTINCT FROM f.u_high AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_high IS NOT DISTINCT FROM r.u_high AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_high IS NOT DISTINCT FROM r.u_high AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT u_high, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY u_high
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT u_high, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY u_high LIMIT 5 OFFSET 3
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(5, greatest((SELECT count(*) FROM f) - 3, 0)), (SELECT count(*) FROM (SELECT DISTINCT u_high FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.u_high IS NOT DISTINCT FROM f.u_high AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_high IS NOT DISTINCT FROM r.u_high AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_high IS NOT DISTINCT FROM r.u_high AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT u_high, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY u_high
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT u_high, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY u_high LIMIT 10 OFFSET 38
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(10, greatest((SELECT count(*) FROM f) - 38, 0)), (SELECT count(*) FROM (SELECT DISTINCT u_high FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.u_high IS NOT DISTINCT FROM f.u_high AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_high IS NOT DISTINCT FROM r.u_high AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_high IS NOT DISTINCT FROM r.u_high AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+query I
+SELECT count(*) FROM (SELECT u_mid FROM tt GROUP BY u_mid)
+----
+41
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT u_mid, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY u_mid
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT u_mid, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY u_mid LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT u_mid FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.u_mid IS NOT DISTINCT FROM f.u_mid AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_mid IS NOT DISTINCT FROM r.u_mid AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_mid IS NOT DISTINCT FROM r.u_mid AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT u_mid, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY u_mid
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT u_mid, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY u_mid LIMIT 41
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(41, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT u_mid FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.u_mid IS NOT DISTINCT FROM f.u_mid AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_mid IS NOT DISTINCT FROM r.u_mid AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_mid IS NOT DISTINCT FROM r.u_mid AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT u_mid, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY u_mid
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT u_mid, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY u_mid LIMIT 1041
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(1041, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT u_mid FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.u_mid IS NOT DISTINCT FROM f.u_mid AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_mid IS NOT DISTINCT FROM r.u_mid AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_mid IS NOT DISTINCT FROM r.u_mid AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT u_mid, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY u_mid
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT u_mid, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY u_mid LIMIT 5 OFFSET 3
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(5, greatest((SELECT count(*) FROM f) - 3, 0)), (SELECT count(*) FROM (SELECT DISTINCT u_mid FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.u_mid IS NOT DISTINCT FROM f.u_mid AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_mid IS NOT DISTINCT FROM r.u_mid AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_mid IS NOT DISTINCT FROM r.u_mid AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT u_mid, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY u_mid
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT u_mid, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY u_mid LIMIT 10 OFFSET 38
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(10, greatest((SELECT count(*) FROM f) - 38, 0)), (SELECT count(*) FROM (SELECT DISTINCT u_mid FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.u_mid IS NOT DISTINCT FROM f.u_mid AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_mid IS NOT DISTINCT FROM r.u_mid AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_mid IS NOT DISTINCT FROM r.u_mid AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+query I
+SELECT count(*) FROM (SELECT dec FROM tt GROUP BY dec)
+----
+41
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT dec, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY dec
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT dec, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY dec LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT dec FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.dec IS NOT DISTINCT FROM f.dec AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.dec IS NOT DISTINCT FROM r.dec AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.dec IS NOT DISTINCT FROM r.dec AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT dec, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY dec
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT dec, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY dec LIMIT 41
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(41, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT dec FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.dec IS NOT DISTINCT FROM f.dec AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.dec IS NOT DISTINCT FROM r.dec AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.dec IS NOT DISTINCT FROM r.dec AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT dec, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY dec
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT dec, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY dec LIMIT 1041
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(1041, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT dec FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.dec IS NOT DISTINCT FROM f.dec AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.dec IS NOT DISTINCT FROM r.dec AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.dec IS NOT DISTINCT FROM r.dec AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT dec, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY dec
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT dec, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY dec LIMIT 5 OFFSET 3
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(5, greatest((SELECT count(*) FROM f) - 3, 0)), (SELECT count(*) FROM (SELECT DISTINCT dec FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.dec IS NOT DISTINCT FROM f.dec AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.dec IS NOT DISTINCT FROM r.dec AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.dec IS NOT DISTINCT FROM r.dec AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT dec, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY dec
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT dec, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY dec LIMIT 10 OFFSET 38
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(10, greatest((SELECT count(*) FROM f) - 38, 0)), (SELECT count(*) FROM (SELECT DISTINCT dec FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.dec IS NOT DISTINCT FROM f.dec AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.dec IS NOT DISTINCT FROM r.dec AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.dec IS NOT DISTINCT FROM r.dec AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+query I
+SELECT count(*) FROM (SELECT bo FROM tt GROUP BY bo)
+----
+3
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT bo, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY bo
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT bo, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY bo LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT bo FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.bo IS NOT DISTINCT FROM f.bo AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bo IS NOT DISTINCT FROM r.bo AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bo IS NOT DISTINCT FROM r.bo AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT bo, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY bo
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT bo, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY bo LIMIT 3
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(3, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT bo FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.bo IS NOT DISTINCT FROM f.bo AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bo IS NOT DISTINCT FROM r.bo AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bo IS NOT DISTINCT FROM r.bo AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT bo, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY bo
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT bo, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY bo LIMIT 1003
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(1003, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT bo FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.bo IS NOT DISTINCT FROM f.bo AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bo IS NOT DISTINCT FROM r.bo AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bo IS NOT DISTINCT FROM r.bo AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT bo, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY bo
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT bo, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY bo LIMIT 10
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(10, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT bo FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.bo IS NOT DISTINCT FROM f.bo AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bo IS NOT DISTINCT FROM r.bo AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bo IS NOT DISTINCT FROM r.bo AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+query I
+SELECT count(*) FROM (SELECT en FROM tt GROUP BY en)
+----
+31
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT en, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY en
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT en, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY en LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT en FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.en IS NOT DISTINCT FROM f.en AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.en IS NOT DISTINCT FROM r.en AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.en IS NOT DISTINCT FROM r.en AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT en, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY en
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT en, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY en LIMIT 31
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(31, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT en FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.en IS NOT DISTINCT FROM f.en AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.en IS NOT DISTINCT FROM r.en AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.en IS NOT DISTINCT FROM r.en AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT en, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY en
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT en, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY en LIMIT 1031
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(1031, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT en FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.en IS NOT DISTINCT FROM f.en AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.en IS NOT DISTINCT FROM r.en AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.en IS NOT DISTINCT FROM r.en AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT en, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY en
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT en, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY en LIMIT 5 OFFSET 3
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(5, greatest((SELECT count(*) FROM f) - 3, 0)), (SELECT count(*) FROM (SELECT DISTINCT en FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.en IS NOT DISTINCT FROM f.en AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.en IS NOT DISTINCT FROM r.en AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.en IS NOT DISTINCT FROM r.en AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT en, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY en
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT en, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY en LIMIT 10 OFFSET 28
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(10, greatest((SELECT count(*) FROM f) - 28, 0)), (SELECT count(*) FROM (SELECT DISTINCT en FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.en IS NOT DISTINCT FROM f.en AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.en IS NOT DISTINCT FROM r.en AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.en IS NOT DISTINCT FROM r.en AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+query I
+SELECT count(*) FROM (SELECT neg FROM tt GROUP BY neg)
+----
+41
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT neg, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY neg
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT neg, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY neg LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT neg FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.neg IS NOT DISTINCT FROM f.neg AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.neg IS NOT DISTINCT FROM r.neg AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.neg IS NOT DISTINCT FROM r.neg AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT neg, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY neg
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT neg, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY neg LIMIT 41
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(41, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT neg FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.neg IS NOT DISTINCT FROM f.neg AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.neg IS NOT DISTINCT FROM r.neg AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.neg IS NOT DISTINCT FROM r.neg AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT neg, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY neg
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT neg, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY neg LIMIT 1041
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(1041, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT neg FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.neg IS NOT DISTINCT FROM f.neg AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.neg IS NOT DISTINCT FROM r.neg AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.neg IS NOT DISTINCT FROM r.neg AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT neg, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY neg
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT neg, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY neg LIMIT 5 OFFSET 3
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(5, greatest((SELECT count(*) FROM f) - 3, 0)), (SELECT count(*) FROM (SELECT DISTINCT neg FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.neg IS NOT DISTINCT FROM f.neg AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.neg IS NOT DISTINCT FROM r.neg AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.neg IS NOT DISTINCT FROM r.neg AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT neg, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY neg
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT neg, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY neg LIMIT 10 OFFSET 38
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(10, greatest((SELECT count(*) FROM f) - 38, 0)), (SELECT count(*) FROM (SELECT DISTINCT neg FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.neg IS NOT DISTINCT FROM f.neg AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.neg IS NOT DISTINCT FROM r.neg AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.neg IS NOT DISTINCT FROM r.neg AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+query I
+SELECT count(*) FROM (SELECT ti FROM tt GROUP BY ti)
+----
+41
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT ti, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY ti
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT ti, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY ti LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT ti FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.ti IS NOT DISTINCT FROM f.ti AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ti IS NOT DISTINCT FROM r.ti AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ti IS NOT DISTINCT FROM r.ti AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT ti, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY ti
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT ti, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY ti LIMIT 41
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(41, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT ti FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.ti IS NOT DISTINCT FROM f.ti AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ti IS NOT DISTINCT FROM r.ti AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ti IS NOT DISTINCT FROM r.ti AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT ti, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY ti
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT ti, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY ti LIMIT 1041
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(1041, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT ti FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.ti IS NOT DISTINCT FROM f.ti AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ti IS NOT DISTINCT FROM r.ti AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ti IS NOT DISTINCT FROM r.ti AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT ti, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY ti
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT ti, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY ti LIMIT 5 OFFSET 3
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(5, greatest((SELECT count(*) FROM f) - 3, 0)), (SELECT count(*) FROM (SELECT DISTINCT ti FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.ti IS NOT DISTINCT FROM f.ti AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ti IS NOT DISTINCT FROM r.ti AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ti IS NOT DISTINCT FROM r.ti AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT ti, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY ti
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT ti, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY ti LIMIT 10 OFFSET 38
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(10, greatest((SELECT count(*) FROM f) - 38, 0)), (SELECT count(*) FROM (SELECT DISTINCT ti FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.ti IS NOT DISTINCT FROM f.ti AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ti IS NOT DISTINCT FROM r.ti AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ti IS NOT DISTINCT FROM r.ti AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+query I
+SELECT count(*) FROM (SELECT si FROM tt GROUP BY si)
+----
+41
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT si, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY si
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT si, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY si LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT si FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.si IS NOT DISTINCT FROM f.si AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.si IS NOT DISTINCT FROM r.si AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.si IS NOT DISTINCT FROM r.si AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT si, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY si
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT si, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY si LIMIT 41
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(41, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT si FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.si IS NOT DISTINCT FROM f.si AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.si IS NOT DISTINCT FROM r.si AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.si IS NOT DISTINCT FROM r.si AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT si, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY si
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT si, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY si LIMIT 1041
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(1041, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT si FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.si IS NOT DISTINCT FROM f.si AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.si IS NOT DISTINCT FROM r.si AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.si IS NOT DISTINCT FROM r.si AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT si, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY si
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT si, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY si LIMIT 5 OFFSET 3
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(5, greatest((SELECT count(*) FROM f) - 3, 0)), (SELECT count(*) FROM (SELECT DISTINCT si FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.si IS NOT DISTINCT FROM f.si AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.si IS NOT DISTINCT FROM r.si AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.si IS NOT DISTINCT FROM r.si AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT si, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY si
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT si, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY si LIMIT 10 OFFSET 38
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(10, greatest((SELECT count(*) FROM f) - 38, 0)), (SELECT count(*) FROM (SELECT DISTINCT si FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.si IS NOT DISTINCT FROM f.si AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.si IS NOT DISTINCT FROM r.si AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.si IS NOT DISTINCT FROM r.si AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+query I
+SELECT count(*) FROM (SELECT uti FROM tt GROUP BY uti)
+----
+41
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT uti, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY uti
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT uti, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY uti LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT uti FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.uti IS NOT DISTINCT FROM f.uti AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.uti IS NOT DISTINCT FROM r.uti AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.uti IS NOT DISTINCT FROM r.uti AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT uti, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY uti
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT uti, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY uti LIMIT 41
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(41, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT uti FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.uti IS NOT DISTINCT FROM f.uti AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.uti IS NOT DISTINCT FROM r.uti AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.uti IS NOT DISTINCT FROM r.uti AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT uti, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY uti
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT uti, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY uti LIMIT 1041
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(1041, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT uti FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.uti IS NOT DISTINCT FROM f.uti AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.uti IS NOT DISTINCT FROM r.uti AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.uti IS NOT DISTINCT FROM r.uti AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT uti, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY uti
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT uti, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY uti LIMIT 5 OFFSET 3
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(5, greatest((SELECT count(*) FROM f) - 3, 0)), (SELECT count(*) FROM (SELECT DISTINCT uti FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.uti IS NOT DISTINCT FROM f.uti AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.uti IS NOT DISTINCT FROM r.uti AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.uti IS NOT DISTINCT FROM r.uti AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT uti, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY uti
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT uti, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY uti LIMIT 10 OFFSET 38
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(10, greatest((SELECT count(*) FROM f) - 38, 0)), (SELECT count(*) FROM (SELECT DISTINCT uti FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.uti IS NOT DISTINCT FROM f.uti AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.uti IS NOT DISTINCT FROM r.uti AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.uti IS NOT DISTINCT FROM r.uti AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+query I
+SELECT count(*) FROM (SELECT ui FROM tt GROUP BY ui)
+----
+41
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT ui, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY ui
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT ui, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY ui LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT ui FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.ui IS NOT DISTINCT FROM f.ui AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ui IS NOT DISTINCT FROM r.ui AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ui IS NOT DISTINCT FROM r.ui AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT ui, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY ui
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT ui, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY ui LIMIT 41
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(41, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT ui FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.ui IS NOT DISTINCT FROM f.ui AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ui IS NOT DISTINCT FROM r.ui AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ui IS NOT DISTINCT FROM r.ui AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT ui, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY ui
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT ui, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY ui LIMIT 1041
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(1041, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT ui FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.ui IS NOT DISTINCT FROM f.ui AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ui IS NOT DISTINCT FROM r.ui AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ui IS NOT DISTINCT FROM r.ui AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT ui, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY ui
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT ui, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY ui LIMIT 5 OFFSET 3
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(5, greatest((SELECT count(*) FROM f) - 3, 0)), (SELECT count(*) FROM (SELECT DISTINCT ui FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.ui IS NOT DISTINCT FROM f.ui AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ui IS NOT DISTINCT FROM r.ui AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ui IS NOT DISTINCT FROM r.ui AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT ui, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY ui
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT ui, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY ui LIMIT 10 OFFSET 38
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(10, greatest((SELECT count(*) FROM f) - 38, 0)), (SELECT count(*) FROM (SELECT DISTINCT ui FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.ui IS NOT DISTINCT FROM f.ui AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ui IS NOT DISTINCT FROM r.ui AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ui IS NOT DISTINCT FROM r.ui AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+query I
+SELECT count(*) FROM (SELECT bi FROM tt GROUP BY bi)
+----
+41
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT bi, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY bi
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT bi, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY bi LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT bi FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.bi IS NOT DISTINCT FROM f.bi AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bi IS NOT DISTINCT FROM r.bi AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bi IS NOT DISTINCT FROM r.bi AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT bi, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY bi
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT bi, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY bi LIMIT 41
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(41, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT bi FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.bi IS NOT DISTINCT FROM f.bi AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bi IS NOT DISTINCT FROM r.bi AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bi IS NOT DISTINCT FROM r.bi AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT bi, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY bi
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT bi, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY bi LIMIT 1041
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(1041, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT bi FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.bi IS NOT DISTINCT FROM f.bi AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bi IS NOT DISTINCT FROM r.bi AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bi IS NOT DISTINCT FROM r.bi AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT bi, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY bi
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT bi, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY bi LIMIT 5 OFFSET 3
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(5, greatest((SELECT count(*) FROM f) - 3, 0)), (SELECT count(*) FROM (SELECT DISTINCT bi FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.bi IS NOT DISTINCT FROM f.bi AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bi IS NOT DISTINCT FROM r.bi AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bi IS NOT DISTINCT FROM r.bi AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT bi, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY bi
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT bi, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY bi LIMIT 10 OFFSET 38
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(10, greatest((SELECT count(*) FROM f) - 38, 0)), (SELECT count(*) FROM (SELECT DISTINCT bi FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.bi IS NOT DISTINCT FROM f.bi AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bi IS NOT DISTINCT FROM r.bi AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bi IS NOT DISTINCT FROM r.bi AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+query I
+SELECT count(*) FROM (SELECT hu FROM tt GROUP BY hu)
+----
+41
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT hu, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY hu
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT hu, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY hu LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT hu FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.hu IS NOT DISTINCT FROM f.hu AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.hu IS NOT DISTINCT FROM r.hu AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.hu IS NOT DISTINCT FROM r.hu AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT hu, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY hu
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT hu, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY hu LIMIT 41
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(41, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT hu FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.hu IS NOT DISTINCT FROM f.hu AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.hu IS NOT DISTINCT FROM r.hu AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.hu IS NOT DISTINCT FROM r.hu AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT hu, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY hu
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT hu, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY hu LIMIT 1041
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(1041, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT hu FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.hu IS NOT DISTINCT FROM f.hu AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.hu IS NOT DISTINCT FROM r.hu AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.hu IS NOT DISTINCT FROM r.hu AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT hu, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY hu
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT hu, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY hu LIMIT 5 OFFSET 3
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(5, greatest((SELECT count(*) FROM f) - 3, 0)), (SELECT count(*) FROM (SELECT DISTINCT hu FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.hu IS NOT DISTINCT FROM f.hu AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.hu IS NOT DISTINCT FROM r.hu AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.hu IS NOT DISTINCT FROM r.hu AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT hu, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY hu
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT hu, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY hu LIMIT 10 OFFSET 38
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(10, greatest((SELECT count(*) FROM f) - 38, 0)), (SELECT count(*) FROM (SELECT DISTINCT hu FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.hu IS NOT DISTINCT FROM f.hu AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.hu IS NOT DISTINCT FROM r.hu AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.hu IS NOT DISTINCT FROM r.hu AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+query I
+SELECT count(*) FROM (SELECT tm FROM tt GROUP BY tm)
+----
+41
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT tm, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY tm
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT tm, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY tm LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT tm FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.tm IS NOT DISTINCT FROM f.tm AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.tm IS NOT DISTINCT FROM r.tm AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.tm IS NOT DISTINCT FROM r.tm AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT tm, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY tm
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT tm, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY tm LIMIT 41
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(41, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT tm FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.tm IS NOT DISTINCT FROM f.tm AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.tm IS NOT DISTINCT FROM r.tm AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.tm IS NOT DISTINCT FROM r.tm AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT tm, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY tm
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT tm, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY tm LIMIT 1041
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(1041, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT tm FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.tm IS NOT DISTINCT FROM f.tm AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.tm IS NOT DISTINCT FROM r.tm AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.tm IS NOT DISTINCT FROM r.tm AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT tm, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY tm
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT tm, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY tm LIMIT 5 OFFSET 3
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(5, greatest((SELECT count(*) FROM f) - 3, 0)), (SELECT count(*) FROM (SELECT DISTINCT tm FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.tm IS NOT DISTINCT FROM f.tm AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.tm IS NOT DISTINCT FROM r.tm AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.tm IS NOT DISTINCT FROM r.tm AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT tm, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY tm
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT tm, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY tm LIMIT 10 OFFSET 38
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(10, greatest((SELECT count(*) FROM f) - 38, 0)), (SELECT count(*) FROM (SELECT DISTINCT tm FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.tm IS NOT DISTINCT FROM f.tm AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.tm IS NOT DISTINCT FROM r.tm AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.tm IS NOT DISTINCT FROM r.tm AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+query I
+SELECT count(*) FROM (SELECT s FROM tt GROUP BY s)
+----
+41
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT s, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY s
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT s, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY s LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT s FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.s IS NOT DISTINCT FROM f.s AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.s IS NOT DISTINCT FROM r.s AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.s IS NOT DISTINCT FROM r.s AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT s, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY s
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT s, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY s LIMIT 41
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(41, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT s FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.s IS NOT DISTINCT FROM f.s AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.s IS NOT DISTINCT FROM r.s AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.s IS NOT DISTINCT FROM r.s AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT s, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY s
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT s, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY s LIMIT 1041
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(1041, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT s FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.s IS NOT DISTINCT FROM f.s AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.s IS NOT DISTINCT FROM r.s AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.s IS NOT DISTINCT FROM r.s AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT s, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY s
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT s, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY s LIMIT 5 OFFSET 3
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(5, greatest((SELECT count(*) FROM f) - 3, 0)), (SELECT count(*) FROM (SELECT DISTINCT s FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.s IS NOT DISTINCT FROM f.s AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.s IS NOT DISTINCT FROM r.s AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.s IS NOT DISTINCT FROM r.s AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT s, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY s
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT s, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY s LIMIT 10 OFFSET 38
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(10, greatest((SELECT count(*) FROM f) - 38, 0)), (SELECT count(*) FROM (SELECT DISTINCT s FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.s IS NOT DISTINCT FROM f.s AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.s IS NOT DISTINCT FROM r.s AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.s IS NOT DISTINCT FROM r.s AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+query I
+SELECT count(*) FROM (SELECT d_wide FROM tt GROUP BY d_wide)
+----
+41
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT d_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY d_wide
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT d_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY d_wide LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT d_wide FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.d_wide IS NOT DISTINCT FROM f.d_wide AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d_wide IS NOT DISTINCT FROM r.d_wide AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d_wide IS NOT DISTINCT FROM r.d_wide AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT d_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY d_wide
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT d_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY d_wide LIMIT 41
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(41, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT d_wide FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.d_wide IS NOT DISTINCT FROM f.d_wide AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d_wide IS NOT DISTINCT FROM r.d_wide AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d_wide IS NOT DISTINCT FROM r.d_wide AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT d_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY d_wide
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT d_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY d_wide LIMIT 1041
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(1041, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT d_wide FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.d_wide IS NOT DISTINCT FROM f.d_wide AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d_wide IS NOT DISTINCT FROM r.d_wide AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d_wide IS NOT DISTINCT FROM r.d_wide AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT d_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY d_wide
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT d_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY d_wide LIMIT 5 OFFSET 3
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(5, greatest((SELECT count(*) FROM f) - 3, 0)), (SELECT count(*) FROM (SELECT DISTINCT d_wide FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.d_wide IS NOT DISTINCT FROM f.d_wide AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d_wide IS NOT DISTINCT FROM r.d_wide AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d_wide IS NOT DISTINCT FROM r.d_wide AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT d_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY d_wide
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT d_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY d_wide LIMIT 10 OFFSET 38
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(10, greatest((SELECT count(*) FROM f) - 38, 0)), (SELECT count(*) FROM (SELECT DISTINCT d_wide FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.d_wide IS NOT DISTINCT FROM f.d_wide AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d_wide IS NOT DISTINCT FROM r.d_wide AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d_wide IS NOT DISTINCT FROM r.d_wide AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+query I
+SELECT count(*) FROM (SELECT ui_wide FROM tt GROUP BY ui_wide)
+----
+41
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT ui_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY ui_wide
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT ui_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY ui_wide LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT ui_wide FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.ui_wide IS NOT DISTINCT FROM f.ui_wide AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ui_wide IS NOT DISTINCT FROM r.ui_wide AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ui_wide IS NOT DISTINCT FROM r.ui_wide AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT ui_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY ui_wide
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT ui_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY ui_wide LIMIT 41
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(41, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT ui_wide FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.ui_wide IS NOT DISTINCT FROM f.ui_wide AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ui_wide IS NOT DISTINCT FROM r.ui_wide AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ui_wide IS NOT DISTINCT FROM r.ui_wide AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT ui_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY ui_wide
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT ui_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY ui_wide LIMIT 1041
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(1041, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT ui_wide FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.ui_wide IS NOT DISTINCT FROM f.ui_wide AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ui_wide IS NOT DISTINCT FROM r.ui_wide AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ui_wide IS NOT DISTINCT FROM r.ui_wide AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT ui_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY ui_wide
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT ui_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY ui_wide LIMIT 5 OFFSET 3
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(5, greatest((SELECT count(*) FROM f) - 3, 0)), (SELECT count(*) FROM (SELECT DISTINCT ui_wide FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.ui_wide IS NOT DISTINCT FROM f.ui_wide AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ui_wide IS NOT DISTINCT FROM r.ui_wide AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ui_wide IS NOT DISTINCT FROM r.ui_wide AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT ui_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY ui_wide
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT ui_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY ui_wide LIMIT 10 OFFSET 38
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(10, greatest((SELECT count(*) FROM f) - 38, 0)), (SELECT count(*) FROM (SELECT DISTINCT ui_wide FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.ui_wide IS NOT DISTINCT FROM f.ui_wide AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ui_wide IS NOT DISTINCT FROM r.ui_wide AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.ui_wide IS NOT DISTINCT FROM r.ui_wide AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+query I
+SELECT count(*) FROM (SELECT u_wide FROM tt GROUP BY u_wide)
+----
+41
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT u_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY u_wide
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT u_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY u_wide LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT u_wide FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.u_wide IS NOT DISTINCT FROM f.u_wide AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_wide IS NOT DISTINCT FROM r.u_wide AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_wide IS NOT DISTINCT FROM r.u_wide AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT u_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY u_wide
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT u_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY u_wide LIMIT 41
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(41, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT u_wide FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.u_wide IS NOT DISTINCT FROM f.u_wide AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_wide IS NOT DISTINCT FROM r.u_wide AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_wide IS NOT DISTINCT FROM r.u_wide AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT u_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY u_wide
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT u_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY u_wide LIMIT 1041
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(1041, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT u_wide FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.u_wide IS NOT DISTINCT FROM f.u_wide AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_wide IS NOT DISTINCT FROM r.u_wide AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_wide IS NOT DISTINCT FROM r.u_wide AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT u_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY u_wide
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT u_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY u_wide LIMIT 5 OFFSET 3
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(5, greatest((SELECT count(*) FROM f) - 3, 0)), (SELECT count(*) FROM (SELECT DISTINCT u_wide FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.u_wide IS NOT DISTINCT FROM f.u_wide AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_wide IS NOT DISTINCT FROM r.u_wide AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_wide IS NOT DISTINCT FROM r.u_wide AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT u_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY u_wide
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT u_wide, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY u_wide LIMIT 10 OFFSET 38
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(10, greatest((SELECT count(*) FROM f) - 38, 0)), (SELECT count(*) FROM (SELECT DISTINCT u_wide FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.u_wide IS NOT DISTINCT FROM f.u_wide AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_wide IS NOT DISTINCT FROM r.u_wide AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_wide IS NOT DISTINCT FROM r.u_wide AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+query II
+EXPLAIN SELECT ts, count(*), sum(v) FROM tt GROUP BY ts LIMIT 7
+----
+physical_plan	<REGEX>:.*LIMITED_DISTINCT.*
+
+query II
+EXPLAIN SELECT neg, count(*), sum(v) FROM tt GROUP BY neg LIMIT 7
+----
+physical_plan	<REGEX>:.*LIMITED_DISTINCT.*
+
+query II
+EXPLAIN SELECT bi, count(*), sum(v) FROM tt GROUP BY bi LIMIT 7
+----
+physical_plan	<REGEX>:.*LIMITED_DISTINCT.*
+
+query II
+EXPLAIN SELECT tm, count(*), sum(v) FROM tt GROUP BY tm LIMIT 7
+----
+physical_plan	<REGEX>:.*LIMITED_DISTINCT.*
+
+query II
+EXPLAIN SELECT s, count(*), sum(v) FROM tt GROUP BY s LIMIT 7
+----
+physical_plan	<REGEX>:.*LIMITED_DISTINCT.*
+
+query II
+EXPLAIN SELECT u_high, count(*), sum(v) FROM tt GROUP BY u_high LIMIT 7
+----
+physical_plan	<REGEX>:.*LIMITED_DISTINCT.*
+
+query II
+EXPLAIN SELECT hu, count(*), sum(v) FROM tt GROUP BY hu LIMIT 7
+----
+physical_plan	<REGEX>:.*LIMITED_DISTINCT.*
+
+query II
+EXPLAIN SELECT si, count(*), sum(v) FROM tt GROUP BY si LIMIT 7
+----
+physical_plan	<REGEX>:.*LIMITED_DISTINCT.*
+
+query II
+EXPLAIN SELECT bo, count(*), sum(v) FROM tt GROUP BY bo LIMIT 7
+----
+physical_plan	<REGEX>:.*LIMITED_DISTINCT.*
+
+query II
+EXPLAIN SELECT d_wide, count(*), sum(v) FROM tt GROUP BY d_wide LIMIT 7
+----
+physical_plan	<REGEX>:.*LIMITED_DISTINCT.*
+
+query II
+EXPLAIN SELECT ui_wide, count(*), sum(v) FROM tt GROUP BY ui_wide LIMIT 7
+----
+physical_plan	<REGEX>:.*LIMITED_DISTINCT.*
+
+query II
+EXPLAIN SELECT u_wide, count(*), sum(v) FROM tt GROUP BY u_wide LIMIT 7
+----
+physical_plan	<REGEX>:.*LIMITED_DISTINCT.*
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT neg, min(s) AS mns, max(s) AS mxs, sum(dec) AS sd, avg(dec) AS ad, min(d) AS md, max(ts) AS mt, bit_and(c) AS ba, bool_or(bo) AS bor, arg_max(v, v) AS am, median(v) AS med, count(neg) AS cn, sum(hu) AS sh FROM tt GROUP BY neg
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT neg, min(s) AS mns, max(s) AS mxs, sum(dec) AS sd, avg(dec) AS ad, min(d) AS md, max(ts) AS mt, bit_and(c) AS ba, bool_or(bo) AS bor, arg_max(v, v) AS am, median(v) AS med, count(neg) AS cn, sum(hu) AS sh, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY neg LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT neg FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.neg IS NOT DISTINCT FROM f.neg AND r.mns IS NOT DISTINCT FROM f.mns AND r.mxs IS NOT DISTINCT FROM f.mxs AND r.sd IS NOT DISTINCT FROM f.sd AND r.ad IS NOT DISTINCT FROM f.ad AND r.md IS NOT DISTINCT FROM f.md AND r.mt IS NOT DISTINCT FROM f.mt AND r.ba IS NOT DISTINCT FROM f.ba AND r.bor IS NOT DISTINCT FROM f.bor AND r.am IS NOT DISTINCT FROM f.am AND r.med IS NOT DISTINCT FROM f.med AND r.cn IS NOT DISTINCT FROM f.cn AND r.sh IS NOT DISTINCT FROM f.sh)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.neg IS NOT DISTINCT FROM r.neg AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.neg IS NOT DISTINCT FROM r.neg AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT d, min(s) AS mns, max(s) AS mxs, sum(dec) AS sd, avg(dec) AS ad, min(d) AS md, max(ts) AS mt, bit_and(c) AS ba, bool_or(bo) AS bor, arg_max(v, v) AS am, median(v) AS med, count(neg) AS cn, sum(hu) AS sh FROM tt GROUP BY d
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT d, min(s) AS mns, max(s) AS mxs, sum(dec) AS sd, avg(dec) AS ad, min(d) AS md, max(ts) AS mt, bit_and(c) AS ba, bool_or(bo) AS bor, arg_max(v, v) AS am, median(v) AS med, count(neg) AS cn, sum(hu) AS sh, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY d LIMIT 41
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(41, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT d FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.d IS NOT DISTINCT FROM f.d AND r.mns IS NOT DISTINCT FROM f.mns AND r.mxs IS NOT DISTINCT FROM f.mxs AND r.sd IS NOT DISTINCT FROM f.sd AND r.ad IS NOT DISTINCT FROM f.ad AND r.md IS NOT DISTINCT FROM f.md AND r.mt IS NOT DISTINCT FROM f.mt AND r.ba IS NOT DISTINCT FROM f.ba AND r.bor IS NOT DISTINCT FROM f.bor AND r.am IS NOT DISTINCT FROM f.am AND r.med IS NOT DISTINCT FROM f.med AND r.cn IS NOT DISTINCT FROM f.cn AND r.sh IS NOT DISTINCT FROM f.sh)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d IS NOT DISTINCT FROM r.d AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d IS NOT DISTINCT FROM r.d AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT g7, min(s) AS mns, max(s) AS mxs, sum(dec) AS sd, avg(dec) AS ad, min(d) AS md, max(ts) AS mt, bit_and(c) AS ba, bool_or(bo) AS bor, arg_max(v, v) AS am, median(v) AS med, count(neg) AS cn, sum(hu) AS sh FROM tt GROUP BY g7
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT g7, min(s) AS mns, max(s) AS mxs, sum(dec) AS sd, avg(dec) AS ad, min(d) AS md, max(ts) AS mt, bit_and(c) AS ba, bool_or(bo) AS bor, arg_max(v, v) AS am, median(v) AS med, count(neg) AS cn, sum(hu) AS sh, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY g7 LIMIT 5
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(5, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT g7 FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.g7 IS NOT DISTINCT FROM f.g7 AND r.mns IS NOT DISTINCT FROM f.mns AND r.mxs IS NOT DISTINCT FROM f.mxs AND r.sd IS NOT DISTINCT FROM f.sd AND r.ad IS NOT DISTINCT FROM f.ad AND r.md IS NOT DISTINCT FROM f.md AND r.mt IS NOT DISTINCT FROM f.mt AND r.ba IS NOT DISTINCT FROM f.ba AND r.bor IS NOT DISTINCT FROM f.bor AND r.am IS NOT DISTINCT FROM f.am AND r.med IS NOT DISTINCT FROM f.med AND r.cn IS NOT DISTINCT FROM f.cn AND r.sh IS NOT DISTINCT FROM f.sh)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT g7, min(s) AS mns, max(s) AS mxs, sum(dec) AS sd, avg(dec) AS ad, min(d) AS md, max(ts) AS mt, bit_and(c) AS ba, bool_or(bo) AS bor, arg_max(v, v) AS am, median(v) AS med, count(neg) AS cn, sum(hu) AS sh FROM tt GROUP BY g7
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT g7, min(s) AS mns, max(s) AS mxs, sum(dec) AS sd, avg(dec) AS ad, min(d) AS md, max(ts) AS mt, bit_and(c) AS ba, bool_or(bo) AS bor, arg_max(v, v) AS am, median(v) AS med, count(neg) AS cn, sum(hu) AS sh, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY g7 LIMIT 3 OFFSET 2
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(3, greatest((SELECT count(*) FROM f) - 2, 0)), (SELECT count(*) FROM (SELECT DISTINCT g7 FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.g7 IS NOT DISTINCT FROM f.g7 AND r.mns IS NOT DISTINCT FROM f.mns AND r.mxs IS NOT DISTINCT FROM f.mxs AND r.sd IS NOT DISTINCT FROM f.sd AND r.ad IS NOT DISTINCT FROM f.ad AND r.md IS NOT DISTINCT FROM f.md AND r.mt IS NOT DISTINCT FROM f.mt AND r.ba IS NOT DISTINCT FROM f.ba AND r.bor IS NOT DISTINCT FROM f.bor AND r.am IS NOT DISTINCT FROM f.am AND r.med IS NOT DISTINCT FROM f.med AND r.cn IS NOT DISTINCT FROM f.cn AND r.sh IS NOT DISTINCT FROM f.sh)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT neg, s, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY neg, s
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT neg, s, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY neg, s LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT neg, s FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.neg IS NOT DISTINCT FROM f.neg AND r.s IS NOT DISTINCT FROM f.s AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.neg IS NOT DISTINCT FROM r.neg AND tt.s IS NOT DISTINCT FROM r.s AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.neg IS NOT DISTINCT FROM r.neg AND tt.s IS NOT DISTINCT FROM r.s AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT neg, s, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY neg, s
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT neg, s, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY neg, s LIMIT 100000
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(100000, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT neg, s FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.neg IS NOT DISTINCT FROM f.neg AND r.s IS NOT DISTINCT FROM f.s AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.neg IS NOT DISTINCT FROM r.neg AND tt.s IS NOT DISTINCT FROM r.s AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.neg IS NOT DISTINCT FROM r.neg AND tt.s IS NOT DISTINCT FROM r.s AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT neg, s, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY neg, s
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT neg, s, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY neg, s LIMIT 50 OFFSET 11
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(50, greatest((SELECT count(*) FROM f) - 11, 0)), (SELECT count(*) FROM (SELECT DISTINCT neg, s FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.neg IS NOT DISTINCT FROM f.neg AND r.s IS NOT DISTINCT FROM f.s AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.neg IS NOT DISTINCT FROM r.neg AND tt.s IS NOT DISTINCT FROM r.s AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.neg IS NOT DISTINCT FROM r.neg AND tt.s IS NOT DISTINCT FROM r.s AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT s, neg, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY s, neg
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT s, neg, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY s, neg LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT s, neg FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.s IS NOT DISTINCT FROM f.s AND r.neg IS NOT DISTINCT FROM f.neg AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.s IS NOT DISTINCT FROM r.s AND tt.neg IS NOT DISTINCT FROM r.neg AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.s IS NOT DISTINCT FROM r.s AND tt.neg IS NOT DISTINCT FROM r.neg AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT s, neg, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY s, neg
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT s, neg, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY s, neg LIMIT 100000
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(100000, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT s, neg FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.s IS NOT DISTINCT FROM f.s AND r.neg IS NOT DISTINCT FROM f.neg AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.s IS NOT DISTINCT FROM r.s AND tt.neg IS NOT DISTINCT FROM r.neg AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.s IS NOT DISTINCT FROM r.s AND tt.neg IS NOT DISTINCT FROM r.neg AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT s, neg, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY s, neg
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT s, neg, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY s, neg LIMIT 50 OFFSET 11
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(50, greatest((SELECT count(*) FROM f) - 11, 0)), (SELECT count(*) FROM (SELECT DISTINCT s, neg FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.s IS NOT DISTINCT FROM f.s AND r.neg IS NOT DISTINCT FROM f.neg AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.s IS NOT DISTINCT FROM r.s AND tt.neg IS NOT DISTINCT FROM r.neg AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.s IS NOT DISTINCT FROM r.s AND tt.neg IS NOT DISTINCT FROM r.neg AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT g7, d, s, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY g7, d, s
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT g7, d, s, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY g7, d, s LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT g7, d, s FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.g7 IS NOT DISTINCT FROM f.g7 AND r.d IS NOT DISTINCT FROM f.d AND r.s IS NOT DISTINCT FROM f.s AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.d IS NOT DISTINCT FROM r.d AND tt.s IS NOT DISTINCT FROM r.s AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.d IS NOT DISTINCT FROM r.d AND tt.s IS NOT DISTINCT FROM r.s AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT g7, d, s, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY g7, d, s
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT g7, d, s, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY g7, d, s LIMIT 100000
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(100000, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT g7, d, s FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.g7 IS NOT DISTINCT FROM f.g7 AND r.d IS NOT DISTINCT FROM f.d AND r.s IS NOT DISTINCT FROM f.s AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.d IS NOT DISTINCT FROM r.d AND tt.s IS NOT DISTINCT FROM r.s AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.d IS NOT DISTINCT FROM r.d AND tt.s IS NOT DISTINCT FROM r.s AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT g7, d, s, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY g7, d, s
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT g7, d, s, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY g7, d, s LIMIT 50 OFFSET 11
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(50, greatest((SELECT count(*) FROM f) - 11, 0)), (SELECT count(*) FROM (SELECT DISTINCT g7, d, s FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.g7 IS NOT DISTINCT FROM f.g7 AND r.d IS NOT DISTINCT FROM f.d AND r.s IS NOT DISTINCT FROM f.s AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.d IS NOT DISTINCT FROM r.d AND tt.s IS NOT DISTINCT FROM r.s AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.d IS NOT DISTINCT FROM r.d AND tt.s IS NOT DISTINCT FROM r.s AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT d, g7, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY d, g7
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT d, g7, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY d, g7 LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT d, g7 FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.d IS NOT DISTINCT FROM f.d AND r.g7 IS NOT DISTINCT FROM f.g7 AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d IS NOT DISTINCT FROM r.d AND tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d IS NOT DISTINCT FROM r.d AND tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT d, g7, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY d, g7
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT d, g7, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY d, g7 LIMIT 100000
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(100000, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT d, g7 FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.d IS NOT DISTINCT FROM f.d AND r.g7 IS NOT DISTINCT FROM f.g7 AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d IS NOT DISTINCT FROM r.d AND tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d IS NOT DISTINCT FROM r.d AND tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT d, g7, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY d, g7
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT d, g7, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY d, g7 LIMIT 50 OFFSET 11
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(50, greatest((SELECT count(*) FROM f) - 11, 0)), (SELECT count(*) FROM (SELECT DISTINCT d, g7 FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.d IS NOT DISTINCT FROM f.d AND r.g7 IS NOT DISTINCT FROM f.g7 AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d IS NOT DISTINCT FROM r.d AND tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.d IS NOT DISTINCT FROM r.d AND tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT g7, neg, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY g7, neg
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT g7, neg, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY g7, neg LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT g7, neg FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.g7 IS NOT DISTINCT FROM f.g7 AND r.neg IS NOT DISTINCT FROM f.neg AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.neg IS NOT DISTINCT FROM r.neg AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.neg IS NOT DISTINCT FROM r.neg AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT g7, neg, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY g7, neg
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT g7, neg, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY g7, neg LIMIT 100000
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(100000, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT g7, neg FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.g7 IS NOT DISTINCT FROM f.g7 AND r.neg IS NOT DISTINCT FROM f.neg AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.neg IS NOT DISTINCT FROM r.neg AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.neg IS NOT DISTINCT FROM r.neg AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT g7, neg, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY g7, neg
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT g7, neg, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY g7, neg LIMIT 50 OFFSET 11
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(50, greatest((SELECT count(*) FROM f) - 11, 0)), (SELECT count(*) FROM (SELECT DISTINCT g7, neg FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.g7 IS NOT DISTINCT FROM f.g7 AND r.neg IS NOT DISTINCT FROM f.neg AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.neg IS NOT DISTINCT FROM r.neg AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.neg IS NOT DISTINCT FROM r.neg AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT bo, g7, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY bo, g7
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT bo, g7, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY bo, g7 LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT bo, g7 FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.bo IS NOT DISTINCT FROM f.bo AND r.g7 IS NOT DISTINCT FROM f.g7 AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bo IS NOT DISTINCT FROM r.bo AND tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bo IS NOT DISTINCT FROM r.bo AND tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT bo, g7, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY bo, g7
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT bo, g7, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY bo, g7 LIMIT 100000
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(100000, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT bo, g7 FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.bo IS NOT DISTINCT FROM f.bo AND r.g7 IS NOT DISTINCT FROM f.g7 AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bo IS NOT DISTINCT FROM r.bo AND tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bo IS NOT DISTINCT FROM r.bo AND tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT bo, g7, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY bo, g7
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT bo, g7, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY bo, g7 LIMIT 50 OFFSET 11
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(50, greatest((SELECT count(*) FROM f) - 11, 0)), (SELECT count(*) FROM (SELECT DISTINCT bo, g7 FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.bo IS NOT DISTINCT FROM f.bo AND r.g7 IS NOT DISTINCT FROM f.g7 AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bo IS NOT DISTINCT FROM r.bo AND tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.bo IS NOT DISTINCT FROM r.bo AND tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT u_high, g7, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY u_high, g7
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT u_high, g7, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY u_high, g7 LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT u_high, g7 FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.u_high IS NOT DISTINCT FROM f.u_high AND r.g7 IS NOT DISTINCT FROM f.g7 AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_high IS NOT DISTINCT FROM r.u_high AND tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_high IS NOT DISTINCT FROM r.u_high AND tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT u_high, g7, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY u_high, g7
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT u_high, g7, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY u_high, g7 LIMIT 100000
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(100000, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT u_high, g7 FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.u_high IS NOT DISTINCT FROM f.u_high AND r.g7 IS NOT DISTINCT FROM f.g7 AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_high IS NOT DISTINCT FROM r.u_high AND tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_high IS NOT DISTINCT FROM r.u_high AND tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT u_high, g7, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY u_high, g7
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT u_high, g7, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY u_high, g7 LIMIT 50 OFFSET 11
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(50, greatest((SELECT count(*) FROM f) - 11, 0)), (SELECT count(*) FROM (SELECT DISTINCT u_high, g7 FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.u_high IS NOT DISTINCT FROM f.u_high AND r.g7 IS NOT DISTINCT FROM f.g7 AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_high IS NOT DISTINCT FROM r.u_high AND tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.u_high IS NOT DISTINCT FROM r.u_high AND tt.g7 IS NOT DISTINCT FROM r.g7 AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT en, ts, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY en, ts
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT en, ts, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY en, ts LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT en, ts FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.en IS NOT DISTINCT FROM f.en AND r.ts IS NOT DISTINCT FROM f.ts AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.en IS NOT DISTINCT FROM r.en AND tt.ts IS NOT DISTINCT FROM r.ts AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.en IS NOT DISTINCT FROM r.en AND tt.ts IS NOT DISTINCT FROM r.ts AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT en, ts, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY en, ts
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT en, ts, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY en, ts LIMIT 100000
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(100000, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT en, ts FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.en IS NOT DISTINCT FROM f.en AND r.ts IS NOT DISTINCT FROM f.ts AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.en IS NOT DISTINCT FROM r.en AND tt.ts IS NOT DISTINCT FROM r.ts AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.en IS NOT DISTINCT FROM r.en AND tt.ts IS NOT DISTINCT FROM r.ts AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT en, ts, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM tt GROUP BY en, ts
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT en, ts, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM tt GROUP BY en, ts LIMIT 50 OFFSET 11
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(50, greatest((SELECT count(*) FROM f) - 11, 0)), (SELECT count(*) FROM (SELECT DISTINCT en, ts FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.en IS NOT DISTINCT FROM f.en AND r.ts IS NOT DISTINCT FROM f.ts AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.en IS NOT DISTINCT FROM r.en AND tt.ts IS NOT DISTINCT FROM r.ts AND tt.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM tt WHERE tt.en IS NOT DISTINCT FROM r.en AND tt.ts IS NOT DISTINCT FROM r.ts AND tt.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+query II
+EXPLAIN SELECT neg, s, count(*) FROM tt GROUP BY neg, s LIMIT 7
+----
+physical_plan	<REGEX>:.*LIMITED_DISTINCT.*
+
+query II
+EXPLAIN SELECT s, neg, count(*) FROM tt GROUP BY s, neg LIMIT 7
+----
+physical_plan	<REGEX>:.*LIMITED_DISTINCT.*
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT neg, count(DISTINCT v) AS cdv, sum(v) FILTER (WHERE c > 500) AS sf, list(v ORDER BY v DESC) AS lo, string_agg(s, ',' ORDER BY v) AS sa, count(*) AS n FROM tt GROUP BY neg
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT neg, count(DISTINCT v) AS cdv, sum(v) FILTER (WHERE c > 500) AS sf, list(v ORDER BY v DESC) AS lo, string_agg(s, ',' ORDER BY v) AS sa, count(*) AS n FROM tt GROUP BY neg LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT neg FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.neg IS NOT DISTINCT FROM f.neg AND r.cdv IS NOT DISTINCT FROM f.cdv AND r.sf IS NOT DISTINCT FROM f.sf AND r.lo IS NOT DISTINCT FROM f.lo AND r.sa IS NOT DISTINCT FROM f.sa AND r.n IS NOT DISTINCT FROM f.n)), 0
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT g7, count(DISTINCT v) AS cdv, sum(v) FILTER (WHERE c > 500) AS sf, list(v ORDER BY v DESC) AS lo, string_agg(s, ',' ORDER BY v) AS sa, count(*) AS n FROM tt GROUP BY g7
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT g7, count(DISTINCT v) AS cdv, sum(v) FILTER (WHERE c > 500) AS sf, list(v ORDER BY v DESC) AS lo, string_agg(s, ',' ORDER BY v) AS sa, count(*) AS n FROM tt GROUP BY g7 LIMIT 4
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(4, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT g7 FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.g7 IS NOT DISTINCT FROM f.g7 AND r.cdv IS NOT DISTINCT FROM f.cdv AND r.sf IS NOT DISTINCT FROM f.sf AND r.lo IS NOT DISTINCT FROM f.lo AND r.sa IS NOT DISTINCT FROM f.sa AND r.n IS NOT DISTINCT FROM f.n)), 0
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT d, count(DISTINCT v) AS cdv, sum(v) FILTER (WHERE c > 500) AS sf, list(v ORDER BY v DESC) AS lo, string_agg(s, ',' ORDER BY v) AS sa, count(*) AS n FROM tt GROUP BY d
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT d, count(DISTINCT v) AS cdv, sum(v) FILTER (WHERE c > 500) AS sf, list(v ORDER BY v DESC) AS lo, string_agg(s, ',' ORDER BY v) AS sa, count(*) AS n FROM tt GROUP BY d LIMIT 100
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(100, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT d FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.d IS NOT DISTINCT FROM f.d AND r.cdv IS NOT DISTINCT FROM f.cdv AND r.sf IS NOT DISTINCT FROM f.sf AND r.lo IS NOT DISTINCT FROM f.lo AND r.sa IS NOT DISTINCT FROM f.sa AND r.n IS NOT DISTINCT FROM f.n)), 0
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT s, count(DISTINCT v) AS cdv, sum(v) FILTER (WHERE c > 500) AS sf, list(v ORDER BY v DESC) AS lo, string_agg(s, ',' ORDER BY v) AS sa, count(*) AS n FROM tt GROUP BY s
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT s, count(DISTINCT v) AS cdv, sum(v) FILTER (WHERE c > 500) AS sf, list(v ORDER BY v DESC) AS lo, string_agg(s, ',' ORDER BY v) AS sa, count(*) AS n FROM tt GROUP BY s LIMIT 5 OFFSET 3
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(5, greatest((SELECT count(*) FROM f) - 3, 0)), (SELECT count(*) FROM (SELECT DISTINCT s FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.s IS NOT DISTINCT FROM f.s AND r.cdv IS NOT DISTINCT FROM f.cdv AND r.sf IS NOT DISTINCT FROM f.sf AND r.lo IS NOT DISTINCT FROM f.lo AND r.sa IS NOT DISTINCT FROM f.sa AND r.n IS NOT DISTINCT FROM f.n)), 0
+----
+true	true	0	0
+
+query II
+EXPLAIN SELECT neg, sum(v) FILTER (WHERE c > 500) FROM tt GROUP BY neg LIMIT 7
+----
+physical_plan	<!REGEX>:.*LIMITED_DISTINCT.*
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT neg, count(*) AS n, sum(v) AS s FROM tt GROUP BY neg HAVING count(*) > 1400
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT neg, count(*) AS n, sum(v) AS s FROM tt GROUP BY neg HAVING count(*) > 1400 LIMIT 6
+
+query III
+SELECT (SELECT count(*) FROM r) = least(6, (SELECT count(*) FROM f)), (SELECT count(*) FROM f) > 6, (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.neg IS NOT DISTINCT FROM f.neg AND r.n = f.n AND r.s = f.s))
+----
+true	true	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT neg, count(*) AS n, sum(v) AS s FROM tt GROUP BY neg HAVING sum(v) < 0
+
+query I
+SELECT count(*) FROM (SELECT neg, count(*), sum(v) FROM tt GROUP BY neg HAVING sum(v) < 0 LIMIT 5)
+----
+0
+
+statement ok
+CREATE TABLE lj_left AS SELECT i::INTEGER AS id, (i % 5)::INTEGER AS grp, i::BIGINT AS lv FROM range(30000) t(i)
+
+statement ok
+CREATE TABLE lj_right AS SELECT (i * 3)::INTEGER AS id, ((i * 3) % 200)::INTEGER AS k, i::BIGINT AS rv FROM range(10000) t(i)
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT lj_right.k AS k, count(*) AS n, sum(lj_left.lv) AS s, count(lj_right.rv) AS cr FROM lj_left LEFT JOIN lj_right ON lj_left.id = lj_right.id GROUP BY lj_right.k
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT lj_right.k AS k, count(*) AS n, sum(lj_left.lv) AS s, count(lj_right.rv) AS cr FROM lj_left LEFT JOIN lj_right ON lj_left.id = lj_right.id GROUP BY lj_right.k LIMIT 5
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(5, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT k FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.k IS NOT DISTINCT FROM f.k AND r.n = f.n AND r.s IS NOT DISTINCT FROM f.s AND r.cr = f.cr)), (SELECT count(*) FROM f)
+----
+true	true	0	201
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT lj_right.k AS k, count(*) AS n, sum(lj_left.lv) AS s, count(lj_right.rv) AS cr FROM lj_left LEFT JOIN lj_right ON lj_left.id = lj_right.id GROUP BY lj_right.k LIMIT 201
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(201, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT k FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.k IS NOT DISTINCT FROM f.k AND r.n = f.n AND r.s IS NOT DISTINCT FROM f.s AND r.cr = f.cr)), (SELECT count(*) FROM f)
+----
+true	true	0	201
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT lj_right.k AS k, count(*) AS n, sum(lj_left.lv) AS s, count(lj_right.rv) AS cr FROM lj_left LEFT JOIN lj_right ON lj_left.id = lj_right.id GROUP BY lj_right.k LIMIT 5000
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(5000, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT k FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.k IS NOT DISTINCT FROM f.k AND r.n = f.n AND r.s IS NOT DISTINCT FROM f.s AND r.cr = f.cr)), (SELECT count(*) FROM f)
+----
+true	true	0	201
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT lj_right.k AS k, count(*) AS n, sum(lj_left.lv) AS s, count(lj_right.rv) AS cr FROM lj_left LEFT JOIN lj_right ON lj_left.id = lj_right.id GROUP BY lj_right.k LIMIT 7 OFFSET 100
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 100, 0)), (SELECT count(*) FROM (SELECT DISTINCT k FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.k IS NOT DISTINCT FROM f.k AND r.n = f.n AND r.s IS NOT DISTINCT FROM f.s AND r.cr = f.cr)), (SELECT count(*) FROM f)
+----
+true	true	0	201
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT lj_right.k AS k, lj_right.rv AS rv, count(*) AS n FROM lj_left LEFT JOIN lj_right ON lj_left.id = lj_right.id GROUP BY lj_right.k, lj_right.rv
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT lj_right.k AS k, lj_right.rv AS rv, count(*) AS n FROM lj_left LEFT JOIN lj_right ON lj_left.id = lj_right.id GROUP BY lj_right.k, lj_right.rv LIMIT 10
+
+query III
+SELECT (SELECT count(*) FROM r) = least(10, (SELECT count(*) FROM f)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.k IS NOT DISTINCT FROM f.k AND r.rv IS NOT DISTINCT FROM f.rv AND r.n = f.n)), (SELECT count(*) FROM (SELECT DISTINCT k, rv FROM r)) = (SELECT count(*) FROM r)
+----
+true	0	true
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT lj_right.k AS k, lj_right.rv AS rv, count(*) AS n FROM lj_left LEFT JOIN lj_right ON lj_left.id = lj_right.id GROUP BY lj_right.k, lj_right.rv LIMIT 9999
+
+query III
+SELECT (SELECT count(*) FROM r) = least(9999, (SELECT count(*) FROM f)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.k IS NOT DISTINCT FROM f.k AND r.rv IS NOT DISTINCT FROM f.rv AND r.n = f.n)), (SELECT count(*) FROM (SELECT DISTINCT k, rv FROM r)) = (SELECT count(*) FROM r)
+----
+true	0	true
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT lj_right.k AS k, lj_right.rv AS rv, count(*) AS n FROM lj_left LEFT JOIN lj_right ON lj_left.id = lj_right.id GROUP BY lj_right.k, lj_right.rv LIMIT 100000
+
+query III
+SELECT (SELECT count(*) FROM r) = least(100000, (SELECT count(*) FROM f)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.k IS NOT DISTINCT FROM f.k AND r.rv IS NOT DISTINCT FROM f.rv AND r.n = f.n)), (SELECT count(*) FROM (SELECT DISTINCT k, rv FROM r)) = (SELECT count(*) FROM r)
+----
+true	0	true
+
+statement ok
+CREATE VIEW u_all AS SELECT neg AS k, v, c FROM tt UNION ALL SELECT neg - 1000000 AS k, v, c FROM tt WHERE v % 3 = 0
+
+statement ok
+CREATE VIEW u_dist AS SELECT neg AS k, v, c FROM tt UNION SELECT neg - 1000000 AS k, v, c FROM tt WHERE v % 3 = 0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT k, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM u_all GROUP BY k
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT k, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM u_all GROUP BY k LIMIT 7
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(7, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT k FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.k IS NOT DISTINCT FROM f.k AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM u_all WHERE u_all.k IS NOT DISTINCT FROM r.k AND u_all.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM u_all WHERE u_all.k IS NOT DISTINCT FROM r.k AND u_all.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT k, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM u_all GROUP BY k
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT k, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM u_all GROUP BY k LIMIT 82
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(82, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT k FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.k IS NOT DISTINCT FROM f.k AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM u_all WHERE u_all.k IS NOT DISTINCT FROM r.k AND u_all.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM u_all WHERE u_all.k IS NOT DISTINCT FROM r.k AND u_all.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT k, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM u_all GROUP BY k
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT k, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM u_all GROUP BY k LIMIT 1000
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(1000, greatest((SELECT count(*) FROM f) - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT k FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.k IS NOT DISTINCT FROM f.k AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM u_all WHERE u_all.k IS NOT DISTINCT FROM r.k AND u_all.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM u_all WHERE u_all.k IS NOT DISTINCT FROM r.k AND u_all.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT k, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l FROM u_dist GROUP BY k
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT k, count(*) AS n, sum(v) AS s, min(v) AS mn, max(v) AS mx, avg(v) AS av, count(c) AS cc, list_sort(list(v)) AS l, first(v) AS fv, any_value(c) AS ac FROM u_dist GROUP BY k LIMIT 9 OFFSET 4
+
+query IIII
+SELECT (SELECT count(*) FROM r) = least(9, greatest((SELECT count(*) FROM f) - 4, 0)), (SELECT count(*) FROM (SELECT DISTINCT k FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.k IS NOT DISTINCT FROM f.k AND r.n IS NOT DISTINCT FROM f.n AND r.s IS NOT DISTINCT FROM f.s AND r.mn IS NOT DISTINCT FROM f.mn AND r.mx IS NOT DISTINCT FROM f.mx AND r.av IS NOT DISTINCT FROM f.av AND r.cc IS NOT DISTINCT FROM f.cc AND r.l IS NOT DISTINCT FROM f.l)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM u_dist WHERE u_dist.k IS NOT DISTINCT FROM r.k AND u_dist.v = r.fv)) + (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM u_dist WHERE u_dist.k IS NOT DISTINCT FROM r.k AND u_dist.c IS NOT DISTINCT FROM r.ac))
+----
+true	true	0	0
+
+statement ok
+CREATE OR REPLACE TABLE f AS WITH cte AS MATERIALIZED (SELECT neg AS k, v, c FROM tt WHERE v % 2 = 0) SELECT k, count(*) AS n, sum(v) AS s FROM cte GROUP BY k
+
+statement ok
+CREATE OR REPLACE TABLE r AS WITH cte AS MATERIALIZED (SELECT neg AS k, v, c FROM tt WHERE v % 2 = 0) SELECT k, count(*) AS n, sum(v) AS s FROM cte GROUP BY k LIMIT 7
+
+query III
+SELECT (SELECT count(*) FROM r) = least(7, (SELECT count(*) FROM f)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.k IS NOT DISTINCT FROM f.k AND r.n = f.n AND r.s = f.s)), (SELECT count(*) FROM (SELECT DISTINCT k FROM r)) = (SELECT count(*) FROM r)
+----
+true	0	true
+
+statement ok
+CREATE OR REPLACE TABLE f AS WITH cte AS MATERIALIZED (SELECT neg AS k, v, c FROM tt WHERE v % 2 = 0) SELECT k, count(*) AS n, sum(v) AS s FROM cte GROUP BY k
+
+statement ok
+CREATE OR REPLACE TABLE r AS WITH cte AS MATERIALIZED (SELECT neg AS k, v, c FROM tt WHERE v % 2 = 0) SELECT k, count(*) AS n, sum(v) AS s FROM cte GROUP BY k LIMIT 500
+
+query III
+SELECT (SELECT count(*) FROM r) = least(500, (SELECT count(*) FROM f)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.k IS NOT DISTINCT FROM f.k AND r.n = f.n AND r.s = f.s)), (SELECT count(*) FROM (SELECT DISTINCT k FROM r)) = (SELECT count(*) FROM r)
+----
+true	0	true
+
+statement ok
+CREATE OR REPLACE TABLE r AS WITH cte AS MATERIALIZED (SELECT neg AS k, v FROM tt) SELECT k, count(*) AS n, sum(v) AS s FROM cte GROUP BY k LIMIT 6
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT neg AS k, count(*) AS n, sum(v) AS s FROM tt GROUP BY neg
+
+query III
+SELECT (SELECT count(*) FROM r) = 6, (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.k IS NOT DISTINCT FROM f.k AND r.n = f.n AND r.s = f.s)), (SELECT count(*) FROM (SELECT DISTINCT k FROM r)) = 6
+----
+true	0	true
+
+query I
+WITH cte AS MATERIALIZED (SELECT neg AS k, v FROM tt) SELECT count(*) FROM (SELECT k, count(*) FROM cte GROUP BY k LIMIT 6) a, (SELECT k, sum(v) FROM cte GROUP BY k LIMIT 3) b
+----
+18
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT cnt, count(*) AS n, sum(sv) AS ss FROM (SELECT neg, count(*) AS cnt, sum(v) AS sv FROM tt GROUP BY neg) GROUP BY cnt
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT cnt, count(*) AS n, sum(sv) AS ss FROM (SELECT neg, count(*) AS cnt, sum(v) AS sv FROM tt GROUP BY neg) GROUP BY cnt LIMIT 2
+
+query III
+SELECT (SELECT count(*) FROM r) = least(2, (SELECT count(*) FROM f)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.cnt IS NOT DISTINCT FROM f.cnt AND r.n = f.n AND r.ss = f.ss)), (SELECT count(*) FROM f) > 2
+----
+true	0	true
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT m, count(*) AS n FROM (SELECT neg, min(v) AS m FROM tt GROUP BY neg) GROUP BY m
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT m, count(*) AS n FROM (SELECT neg, min(v) AS m FROM tt GROUP BY neg) GROUP BY m LIMIT 4
+
+query III
+SELECT (SELECT count(*) FROM r) = 4, (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.m = f.m AND r.n = f.n)), (SELECT count(*) FROM f) > 4
+----
+true	0	true
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT rn, count(*) AS n, sum(v) AS s FROM (SELECT v, row_number() OVER (PARTITION BY neg ORDER BY v) AS rn FROM tt) GROUP BY rn
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT rn, count(*) AS n, sum(v) AS s FROM (SELECT v, row_number() OVER (PARTITION BY neg ORDER BY v) AS rn FROM tt) GROUP BY rn LIMIT 5
+
+query III
+SELECT (SELECT count(*) FROM r) = 5, (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.rn = f.rn AND r.n = f.n AND r.s = f.s)), (SELECT count(*) FROM f) > 5
+----
+true	0	true
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT k2, count(*) AS n, sum(v) AS s FROM (SELECT neg % 7 AS k2, v FROM tt) GROUP BY k2
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT k2, count(*) AS n, sum(v) AS s FROM (SELECT neg % 7 AS k2, v FROM tt) GROUP BY k2 LIMIT 3
+
+query III
+SELECT (SELECT count(*) FROM r) = 3, (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.k2 IS NOT DISTINCT FROM f.k2 AND r.n = f.n AND r.s = f.s)), (SELECT count(*) FROM f) > 3
+----
+true	0	true
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT k, count(*) AS n, sum(sv) AS s FROM (SELECT neg AS k, g7, sum(v) AS sv FROM tt GROUP BY neg, g7) GROUP BY k
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT k, count(*) AS n, sum(sv) AS s FROM (SELECT neg AS k, g7, sum(v) AS sv FROM tt GROUP BY neg, g7) GROUP BY k LIMIT 4
+
+query III
+SELECT (SELECT count(*) FROM r) = least(4, (SELECT count(*) FROM f)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.k IS NOT DISTINCT FROM f.k AND r.n = f.n AND r.s = f.s)), (SELECT count(*) FROM (SELECT DISTINCT k FROM r)) = (SELECT count(*) FROM r)
+----
+true	0	true
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT k, count(*) AS n, sum(sv) AS s FROM (SELECT neg AS k, g7, sum(v) AS sv FROM tt GROUP BY neg, g7) GROUP BY k LIMIT 41
+
+query III
+SELECT (SELECT count(*) FROM r) = least(41, (SELECT count(*) FROM f)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.k IS NOT DISTINCT FROM f.k AND r.n = f.n AND r.s = f.s)), (SELECT count(*) FROM (SELECT DISTINCT k FROM r)) = (SELECT count(*) FROM r)
+----
+true	0	true
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT k, count(*) AS n, sum(sv) AS s FROM (SELECT neg AS k, g7, sum(v) AS sv FROM tt GROUP BY neg, g7) GROUP BY k LIMIT 100
+
+query III
+SELECT (SELECT count(*) FROM r) = least(100, (SELECT count(*) FROM f)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.k IS NOT DISTINCT FROM f.k AND r.n = f.n AND r.s = f.s)), (SELECT count(*) FROM (SELECT DISTINCT k FROM r)) = (SELECT count(*) FROM r)
+----
+true	0	true
+
+statement ok
+CREATE OR REPLACE TABLE inner_full AS SELECT neg, g7, sum(v) AS sv, count(*) AS n FROM tt GROUP BY neg, g7
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT DISTINCT ON (neg) neg, g7, sv, n FROM (SELECT neg, g7, sum(v) AS sv, count(*) AS n FROM tt GROUP BY neg, g7) LIMIT 5
+
+query III
+SELECT (SELECT count(*) FROM r) = least(5, greatest((SELECT count(DISTINCT neg) FROM tt) + 1 - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT neg FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM inner_full i WHERE i.neg IS NOT DISTINCT FROM r.neg AND i.g7 IS NOT DISTINCT FROM r.g7 AND i.sv = r.sv AND i.n = r.n))
+----
+true	true	0
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT DISTINCT ON (neg) neg, g7, sv, n FROM (SELECT neg, g7, sum(v) AS sv, count(*) AS n FROM tt GROUP BY neg, g7) LIMIT 41
+
+query III
+SELECT (SELECT count(*) FROM r) = least(41, greatest((SELECT count(DISTINCT neg) FROM tt) + 1 - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT neg FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM inner_full i WHERE i.neg IS NOT DISTINCT FROM r.neg AND i.g7 IS NOT DISTINCT FROM r.g7 AND i.sv = r.sv AND i.n = r.n))
+----
+true	true	0
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT DISTINCT ON (neg) neg, g7, sv, n FROM (SELECT neg, g7, sum(v) AS sv, count(*) AS n FROM tt GROUP BY neg, g7) LIMIT 1000
+
+query III
+SELECT (SELECT count(*) FROM r) = least(1000, greatest((SELECT count(DISTINCT neg) FROM tt) + 1 - 0, 0)), (SELECT count(*) FROM (SELECT DISTINCT neg FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM inner_full i WHERE i.neg IS NOT DISTINCT FROM r.neg AND i.g7 IS NOT DISTINCT FROM r.g7 AND i.sv = r.sv AND i.n = r.n))
+----
+true	true	0
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT DISTINCT ON (neg) neg, g7, sv, n FROM (SELECT neg, g7, sum(v) AS sv, count(*) AS n FROM tt GROUP BY neg, g7) LIMIT 4 OFFSET 6
+
+query III
+SELECT (SELECT count(*) FROM r) = least(4, greatest((SELECT count(DISTINCT neg) FROM tt) + 1 - 6, 0)), (SELECT count(*) FROM (SELECT DISTINCT neg FROM r)) = (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM inner_full i WHERE i.neg IS NOT DISTINCT FROM r.neg AND i.g7 IS NOT DISTINCT FROM r.g7 AND i.sv = r.sv AND i.n = r.n))
+----
+true	true	0
+
+statement ok
+PRAGMA threads=1
+
+statement ok
+CREATE OR REPLACE TABLE ordered_src AS SELECT neg, v FROM tt ORDER BY neg, v DESC
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT DISTINCT ON (neg) neg, v FROM (SELECT neg, v FROM tt ORDER BY neg, v DESC)
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT DISTINCT ON (neg) neg, v FROM (SELECT neg, v FROM tt ORDER BY neg, v DESC) LIMIT 5
+
+query III
+SELECT (SELECT count(*) FROM r) = least(5, (SELECT count(*) FROM f)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.neg IS NOT DISTINCT FROM f.neg AND r.v = f.v)), (SELECT count(*) FROM (SELECT DISTINCT neg FROM r)) = (SELECT count(*) FROM r)
+----
+true	0	true
+
+statement ok
+CREATE OR REPLACE TABLE ordered_src AS SELECT neg, v FROM tt ORDER BY neg, v DESC
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT DISTINCT ON (neg) neg, v FROM (SELECT neg, v FROM tt ORDER BY neg, v DESC)
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT DISTINCT ON (neg) neg, v FROM (SELECT neg, v FROM tt ORDER BY neg, v DESC) LIMIT 41
+
+query III
+SELECT (SELECT count(*) FROM r) = least(41, (SELECT count(*) FROM f)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.neg IS NOT DISTINCT FROM f.neg AND r.v = f.v)), (SELECT count(*) FROM (SELECT DISTINCT neg FROM r)) = (SELECT count(*) FROM r)
+----
+true	0	true
+
+statement ok
+CREATE OR REPLACE TABLE ordered_src AS SELECT neg, v FROM tt ORDER BY neg, v DESC
+
+statement ok
+CREATE OR REPLACE TABLE f AS SELECT DISTINCT ON (neg) neg, v FROM (SELECT neg, v FROM tt ORDER BY neg, v DESC)
+
+statement ok
+CREATE OR REPLACE TABLE r AS SELECT DISTINCT ON (neg) neg, v FROM (SELECT neg, v FROM tt ORDER BY neg, v DESC) LIMIT 1000
+
+query III
+SELECT (SELECT count(*) FROM r) = least(1000, (SELECT count(*) FROM f)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM f WHERE r.neg IS NOT DISTINCT FROM f.neg AND r.v = f.v)), (SELECT count(*) FROM (SELECT DISTINCT neg FROM r)) = (SELECT count(*) FROM r)
+----
+true	0	true
+
+statement ok
+PRAGMA threads=4
+
+statement ok
+CREATE OR REPLACE TABLE pf AS SELECT a, b, count(*) AS n, sum(v) AS s FROM t_neg GROUP BY a, b
+
+statement ok
+PREPARE limited_checked AS WITH r AS MATERIALIZED (SELECT a, b, count(*) AS n, sum(v) AS s FROM t_neg GROUP BY a, b LIMIT $1) SELECT (SELECT count(*) FROM r), (SELECT count(*) FROM (SELECT DISTINCT a, b FROM r)), (SELECT count(*) FROM r WHERE NOT EXISTS (SELECT 1 FROM pf WHERE pf.a = r.a AND pf.b = r.b AND pf.n = r.n AND pf.s = r.s))
+
+query III
+EXECUTE limited_checked(25)
+----
+25	25	0
+
+query III
+EXECUTE limited_checked(3)
+----
+3	3	0
+
+query III
+EXECUTE limited_checked(25)
+----
+25	25	0
+
+query III
+EXECUTE limited_checked(1)
+----
+1	1	0
+
+query III
+EXECUTE limited_checked(0)
+----
+0	0	0
+
+query III
+EXECUTE limited_checked(1000)
+----
+1000	1000	0
+
+query III
+EXECUTE limited_checked(100000000)
+----
+270029	270029	0
+
+query III
+EXECUTE limited_checked(7)
+----
+7	7	0
+
+query I
+SELECT count(*) FROM (SELECT neg, count(*), sum(v) FROM tt GROUP BY neg LIMIT 9223372036854775807 OFFSET 9223372036854775807)
+----
+0
+
+query I
+SELECT count(*) FROM (SELECT neg, count(*), sum(v) FROM tt GROUP BY neg LIMIT 9223372036854775807 OFFSET 5)
+----
+36
+
+query I
+SELECT count(*) FROM (SELECT neg, count(*), sum(v) FROM tt GROUP BY neg LIMIT 5 OFFSET 9223372036854775807)
+----
+0
+

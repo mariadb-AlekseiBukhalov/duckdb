@@ -18,6 +18,8 @@ namespace duckdb {
 
 //! LogicalAggregate represents an aggregate operation with (optional) GROUP BY
 //! operator.
+struct DynamicFilterData;
+
 class LogicalAggregate : public LogicalOperator {
 public:
 	LogicalPlanSQLExportResult ToSQL(LogicalPlanSQLExportContext &context,
@@ -44,6 +46,8 @@ public:
 	vector<unique_ptr<BaseStatistics>> group_stats;
 	//! Whether the inputs to all expression are non-NULL
 	TupleDataValidityType distinct_validity;
+	shared_ptr<DynamicFilterData> limit_filter;
+	unique_ptr<Expression> limit_filter_group;
 
 public:
 	InsertionOrderPreservingMap<string> ParamsToString() const override;

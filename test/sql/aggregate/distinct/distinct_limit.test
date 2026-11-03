@@ -53,7 +53,7 @@ SELECT COUNT(*) FROM (SELECT i % 100 FROM range(1000000) t(i) GROUP BY 1 LIMIT 1
 ----
 10
 
-# GROUP BY with aggregate functions should NOT use PhysicalLimitedDistinct
+# GROUP BY with aggregate functions on a perfect hash group key does not use PhysicalLimitedDistinct
 query I
 SELECT COUNT(*) FROM (SELECT i % 100, COUNT(*) FROM range(1000000) t(i) GROUP BY 1 LIMIT 10)
 ----
@@ -155,13 +155,13 @@ SELECT count(*) FROM (SELECT i % 8 FROM range(1000000) t(i) GROUP BY 1 LIMIT 5)
 ----
 5
 
-# EXPLAIN: GROUP BY with aggregates uses HASH_GROUP_BY
+# EXPLAIN: GROUP BY with aggregates on a perfect hash group key keeps the perfect hash aggregate
 query II
 EXPLAIN SELECT i % 100, COUNT(*) FROM range(1000000) t(i) GROUP BY 1 LIMIT 10
 ----
 physical_plan	<REGEX>:.*HASH_GROUP_BY.*
 
-# EXPLAIN: GROUP BY with FIRST aggregate uses HASH_GROUP_BY
+# EXPLAIN: GROUP BY with FIRST aggregate on a perfect hash group key keeps the perfect hash aggregate
 query II
 EXPLAIN SELECT i % 100, first(i) FROM range(1000000) t(i) GROUP BY 1 LIMIT 10
 ----
