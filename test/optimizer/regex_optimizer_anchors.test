@@ -31,3 +31,23 @@ query II
 SELECT regexp_replace('aaa', '^(a+)$', '\1'), regexp_replace('aaa', '^(a+)$', '\0')
 ----
 aaa	aaa
+
+statement ok
+CREATE TABLE t_dot AS SELECT * FROM (VALUES (1, 'abc', 'a'), (2, 'ab' || chr(10) || 'c', 'ab' || chr(10) || 'c'), (3, 'xabc', 'xabc'), (4, 'a', 'a')) t(id, s, expected)
+
+# a trailing .* must not change what group 0 returns
+query I
+SELECT list(regexp_replace(s, '^a.*$', '\0') = s ORDER BY id) FROM t_dot
+----
+[true, true, true, true]
+
+# a trailing .* keeps matching across a newline only with the s flag
+query I
+SELECT list(regexp_replace(s, '^(a).*$', '\1') = expected ORDER BY id) FROM t_dot
+----
+[true, true, true, true]
+
+query I
+SELECT list(regexp_replace(s, '(?s)^(a).*$', '\1') ORDER BY id) FROM t_dot
+----
+[a, a, xabc, a]

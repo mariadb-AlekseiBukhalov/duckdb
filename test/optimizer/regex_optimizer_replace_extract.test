@@ -1,0 +1,63 @@
+# name: test/optimizer/regex_optimizer_replace_extract.test
+# description: regexp_replace rewritten to regexp_extract keeps the results for NULL rows, global replace and unicode groups
+# group: [optimizer]
+
+statement ok
+CREATE TABLE r AS SELECT * FROM (VALUES
+	(1, 'héllo-12-🦆x'),
+	(2, NULL),
+	(3, 'ab-7-x' || chr(10) || 'tail'),
+	(4, 'no match'),
+	(5, ''),
+	(6, 'Ωμέγα-345-'),
+	(7, '日本-0-語-9'),
+	(8, NULL)
+) t(id, s)
+
+statement ok
+CREATE MACRO q() AS TABLE SELECT id,
+	regexp_replace(s, '^(\p{L}+)-(\d+)-.*$', '\2') AS a,
+	regexp_replace(s, '^(\p{L}+)-(\d+)-(.*)$', '\3') AS b,
+	regexp_replace(s, '^(\p{L}+)-(\d+)-(.*)$', '\1') AS c,
+	regexp_replace(s, '^([^-]+)-(.*)$', '\2', 'g') AS d,
+	regexp_replace(s, '^(\p{L}+)-(\d+)-[^\n]*$', '\2', 'g') AS e,
+	regexp_replace(s, '(é|語)', '<\1>', 'g') AS f
+FROM r
+
+query IIIIIII
+SELECT id, replace(COLUMNS(* EXCLUDE (id)), chr(10), '\n') FROM q() ORDER BY id
+----
+1	12	🦆x	héllo	12-🦆x	12	h<é>llo-12-🦆x
+2	NULL	NULL	NULL	NULL	NULL	NULL
+3	ab-7-x\ntail	ab-7-x\ntail	ab-7-x\ntail	ab-7-x\ntail	ab-7-x\ntail	ab-7-x\ntail
+4	no match	no match	no match	no match	no match	no match
+5	(empty)	(empty)	(empty)	(empty)	(empty)	(empty)
+6	345	(empty)	Ωμέγα	345-	345	Ωμέγα-345-
+7	0	語-9	日本	0-語-9	0	日本-0-<語>-9
+8	NULL	NULL	NULL	NULL	NULL	NULL
+
+query II
+EXPLAIN SELECT regexp_replace(s, '^(\p{L}+)-(\d+)-(.*)$', '\3') FROM r
+----
+physical_plan	<REGEX>:.*regexp_extract.*
+
+statement ok
+CREATE TABLE optimized AS SELECT * FROM q()
+
+statement ok
+SET disabled_optimizers='expression_rewriter'
+
+query II
+EXPLAIN SELECT regexp_replace(s, '^(\p{L}+)-(\d+)-(.*)$', '\3') FROM r
+----
+physical_plan	<!REGEX>:.*regexp_extract.*
+
+query I
+SELECT count(*) FROM (SELECT * FROM optimized EXCEPT ALL SELECT * FROM q())
+----
+0
+
+query I
+SELECT count(*) FROM (SELECT * FROM q() EXCEPT ALL SELECT * FROM optimized)
+----
+0

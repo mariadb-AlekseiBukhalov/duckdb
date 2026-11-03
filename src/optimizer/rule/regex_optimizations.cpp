@@ -5,6 +5,7 @@
 #include "duckdb/function/builtin_function_lookup.hpp"
 #include "duckdb/optimizer/expression_rewriter.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_case_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/function/scalar/string_common.hpp"
 #include "duckdb/function/scalar/string_functions.hpp"
@@ -264,6 +265,35 @@ static bool RegexpHasWholeTextAnchors(duckdb_re2::Regexp *regexp) {
 	       subs[regexp->nsub() - 1]->op() == duckdb_re2::kRegexpEndText;
 }
 
+static bool StripTrailingDotStar(const string &pattern, duckdb_re2::Regexp *regexp,
+                                 const duckdb_re2::RE2::Options &options, bool &needs_newline_check, string &stripped) {
+	if (options.encoding() == duckdb_re2::RE2::Options::EncodingLatin1 || regexp->op() != duckdb_re2::kRegexpConcat ||
+	    regexp->nsub() < 3) {
+		return false;
+	}
+	if (pattern.size() < 3 || pattern.compare(pattern.size() - 3, 3, ".*$") != 0) {
+		return false;
+	}
+	auto subs = regexp->sub();
+	auto star = subs[regexp->nsub() - 2];
+	if (star->op() != duckdb_re2::kRegexpStar || (star->parse_flags() & duckdb_re2::Regexp::NonGreedy)) {
+		return false;
+	}
+	auto child = star->sub()[0];
+	if (child->op() == duckdb_re2::kRegexpAnyChar) {
+		needs_newline_check = false;
+	} else if (child->op() == duckdb_re2::kRegexpCharClass && !child->cc()->Contains('\n') &&
+	           child->cc()->size() == 0x10FFFF) {
+		needs_newline_check = true;
+	} else {
+		return false;
+	}
+	stripped = pattern.substr(0, pattern.size() - 3);
+	duckdb_re2::RE2 stripped_re(duckdb_re2::StringPiece(stripped.c_str(), stripped.size()), options);
+	duckdb_re2::RE2 full_re(duckdb_re2::StringPiece(pattern.c_str(), pattern.size()), options);
+	return stripped_re.ok() && stripped_re.NumberOfCapturingGroups() == full_re.NumberOfCapturingGroups();
+}
+
 // Rewrites `regexp_replace(s, P, '\N')` into `regexp_extract(s, P, N, 'k')` when parsed RE2 anchors
 // prove that any match spans the whole input. The original pattern is preserved; any regexp_extract
 // pattern simplification belongs in a separate optimization.
@@ -274,7 +304,7 @@ unique_ptr<Expression> RegexpReplaceExtractRule::Apply(LogicalOperator &op, vect
 		return nullptr;
 	}
 	auto &bind_data = root.BindInfo()->Cast<RegexpReplaceBindData>();
-	if (!bind_data.constant_pattern || bind_data.global_replace) {
+	if (!bind_data.constant_pattern || (bind_data.global_replace && root.GetChildrenMutable().size() != 3)) {
 		return nullptr;
 	}
 	// Literal mode treats `^`/`$` as literal chars, so the shape check below would be meaningless.
@@ -314,20 +344,45 @@ unique_ptr<Expression> RegexpReplaceExtractRule::Apply(LogicalOperator &op, vect
 		options_str = StringValue::Get(options_const.GetValue()) + options_str;
 	}
 
-	vector<unique_ptr<Expression>> extract_children;
-	extract_children.emplace_back(std::move(root.GetChildrenMutable()[0]));
-	extract_children.emplace_back(make_uniq<BoundConstantExpression>(Value(pattern)));
-	extract_children.emplace_back(make_uniq<BoundConstantExpression>(Value::INTEGER(group_index)));
-	extract_children.emplace_back(make_uniq<BoundConstantExpression>(Value(std::move(options_str))));
+	string stripped_pattern;
+	bool needs_newline_check = false;
+	bool can_strip = group_index != 0 && StripTrailingDotStar(pattern, compiled.Regexp(), bind_data.options,
+	                                                          needs_newline_check, stripped_pattern);
 
 	FunctionBinder binder(rewriter.context);
 	ErrorData error;
-	auto extract_expr =
-	    binder.BindScalarFunction(Identifier::DefaultSchema(), "regexp_extract", std::move(extract_children), error);
-	if (!extract_expr) {
+	auto make_extract = [&](unique_ptr<Expression> input, const string &extract_pattern) {
+		vector<unique_ptr<Expression>> extract_children;
+		extract_children.emplace_back(std::move(input));
+		extract_children.emplace_back(make_uniq<BoundConstantExpression>(Value(extract_pattern)));
+		extract_children.emplace_back(make_uniq<BoundConstantExpression>(Value::INTEGER(group_index)));
+		extract_children.emplace_back(make_uniq<BoundConstantExpression>(Value(options_str)));
+		return binder.BindScalarFunction(Identifier::DefaultSchema(), "regexp_extract", std::move(extract_children),
+		                                 error);
+	};
+
+	auto &input_expr = root.GetChildrenMutable()[0];
+	if (!can_strip) {
+		return make_extract(std::move(input_expr), pattern);
+	}
+	if (!needs_newline_check) {
+		return make_extract(std::move(input_expr), stripped_pattern);
+	}
+	if (!input_expr->IsConsistent()) {
+		return make_extract(std::move(input_expr), pattern);
+	}
+
+	vector<unique_ptr<Expression>> contains_children;
+	contains_children.emplace_back(input_expr->Copy());
+	contains_children.emplace_back(make_uniq<BoundConstantExpression>(Value("\n")));
+	auto contains_expr =
+	    binder.BindScalarFunction(Identifier::DefaultSchema(), "contains", std::move(contains_children), error);
+	auto exact_expr = make_extract(input_expr->Copy(), pattern);
+	auto fast_expr = make_extract(std::move(input_expr), stripped_pattern);
+	if (!contains_expr || !exact_expr || !fast_expr) {
 		return nullptr;
 	}
-	return extract_expr;
+	return make_uniq<BoundCaseExpression>(std::move(contains_expr), std::move(exact_expr), std::move(fast_expr));
 }
 
 } // namespace duckdb
