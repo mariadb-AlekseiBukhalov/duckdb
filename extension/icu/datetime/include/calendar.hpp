@@ -80,6 +80,7 @@ public:
 	//! The name of the calendar system, e.g. "gregorian"
 	virtual const char *GetType() const = 0;
 
+	virtual const TimeZone &GetTimeZone() const = 0;
 	virtual void SetTimeZone(unique_ptr<TimeZone> zone) = 0;
 	//! Whether the two calendars would produce the same results
 	virtual bool Equals(const Calendar &other) const = 0;
@@ -125,7 +126,7 @@ public:
 	//! A table of groups, terminated by a null group
 	using ResolutionTable = const ResolutionGroup *;
 
-	const TimeZone &GetTimeZone() const {
+	const TimeZone &GetTimeZone() const override {
 		return *zone;
 	}
 	void SetTimeZone(unique_ptr<TimeZone> zone_p) override;

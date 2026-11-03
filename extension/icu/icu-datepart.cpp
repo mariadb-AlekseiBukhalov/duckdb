@@ -294,6 +294,72 @@ struct ICUDatePart : public ICUDateFunc {
 		}
 	};
 
+	enum class FastPart : uint8_t { NONE, YEAR, MONTH, DAY, HOUR, MINUTE, SECOND };
+
+	static FastPart GetFastPart(part_bigint_t adapter) {
+		if (adapter == ExtractYear) {
+			return FastPart::YEAR;
+		} else if (adapter == ExtractMonth) {
+			return FastPart::MONTH;
+		} else if (adapter == ExtractDay) {
+			return FastPart::DAY;
+		} else if (adapter == ExtractHour) {
+			return FastPart::HOUR;
+		} else if (adapter == ExtractMinute) {
+			return FastPart::MINUTE;
+		} else if (adapter == ExtractSecond) {
+			return FastPart::SECOND;
+		}
+		return FastPart::NONE;
+	}
+
+	static bool TryFastDatePart(const TimeZone &zone, FastPart part, int64_t micros, int64_t &result) {
+		static constexpr int64_t MILLIS_PER_DAY = 86400000;
+		static constexpr int64_t MIN_LOCAL_MILLIS = -62135596800000;
+		static constexpr int64_t MAX_LOCAL_DAYS = 2932896;
+		int64_t millis = micros / Interval::MICROS_PER_MSEC;
+		if (micros % Interval::MICROS_PER_MSEC < 0) {
+			--millis;
+		}
+		int32_t raw_offset;
+		int32_t dst_offset;
+		zone.GetOffset(millis, raw_offset, dst_offset);
+		const int64_t local_millis = millis + raw_offset + dst_offset;
+		if (local_millis < MIN_LOCAL_MILLIS) {
+			return false;
+		}
+		int64_t days = local_millis / MILLIS_PER_DAY;
+		if (local_millis % MILLIS_PER_DAY < 0) {
+			--days;
+		}
+		if (days > MAX_LOCAL_DAYS) {
+			return false;
+		}
+		const int64_t millis_in_day = local_millis - days * MILLIS_PER_DAY;
+		switch (part) {
+		case FastPart::YEAR:
+			result = Date::ExtractYear(date_t(UnsafeNumericCast<int32_t>(days)));
+			return true;
+		case FastPart::MONTH:
+			result = Date::ExtractMonth(date_t(UnsafeNumericCast<int32_t>(days)));
+			return true;
+		case FastPart::DAY:
+			result = Date::ExtractDay(date_t(UnsafeNumericCast<int32_t>(days)));
+			return true;
+		case FastPart::HOUR:
+			result = millis_in_day / 3600000;
+			return true;
+		case FastPart::MINUTE:
+			result = (millis_in_day / 60000) % 60;
+			return true;
+		case FastPart::SECOND:
+			result = (millis_in_day / 1000) % 60;
+			return true;
+		default:
+			return false;
+		}
+	}
+
 	template <typename INPUT_TYPE, typename RESULT_TYPE>
 	static void UnaryTimestampFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 		using BIND_TYPE = BindAdapterData<RESULT_TYPE>;
@@ -305,9 +371,25 @@ struct ICUDatePart : public ICUDateFunc {
 		CalendarPtr calendar_ptr(info.calendar->Copy());
 		auto calendar = calendar_ptr.get();
 
+		FastPart fast_part = FastPart::NONE;
+		const TimeZone *fast_zone = nullptr;
+		if constexpr (std::is_same<INPUT_TYPE, timestamp_tz_t>::value && std::is_same<RESULT_TYPE, int64_t>::value) {
+			fast_part = GetFastPart(info.adapters[0]);
+			if (fast_part != FastPart::NONE && StringUtil::CIEquals(calendar->GetType(), "gregorian")) {
+				fast_zone = &calendar->GetTimeZone();
+			}
+		}
+
 		UnaryExecutor::Execute<INPUT_TYPE, RESULT_TYPE>(
 		    date_arg, result, [&](INPUT_TYPE input) -> optional<RESULT_TYPE> {
 			    if (input.IsFinite()) {
+				    if constexpr (std::is_same<INPUT_TYPE, timestamp_tz_t>::value &&
+				                  std::is_same<RESULT_TYPE, int64_t>::value) {
+					    int64_t fast_result;
+					    if (fast_zone && TryFastDatePart(*fast_zone, fast_part, input.value, fast_result)) {
+						    return fast_result;
+					    }
+				    }
 				    const auto micros = SetTime(calendar, TruncCast<INPUT_TYPE, timestamp_tz_t>(input));
 				    return info.adapters[0](calendar, micros);
 			    } else {

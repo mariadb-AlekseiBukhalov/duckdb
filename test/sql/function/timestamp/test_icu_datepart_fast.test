@@ -1,0 +1,117 @@
+# name: test/sql/function/timestamp/test_icu_datepart_fast.test
+# description: YEAR to SECOND of a TIMESTAMPTZ with a constant part match date_part with a part column
+# group: [timestamp]
+
+require icu
+
+statement ok
+SET Calendar = 'gregorian';
+
+statement ok
+CREATE TABLE parts AS SELECT unnest(['year', 'month', 'day', 'hour', 'minute', 'second']) AS p
+
+statement ok
+CREATE TABLE ts AS
+SELECT t FROM (
+	SELECT unnest(generate_series(TIMESTAMPTZ '1890-01-01 00:00:00+00', TIMESTAMPTZ '2040-01-01 00:00:00+00', INTERVAL '23 days 7 hours 11 minutes 13.5 seconds')) AS t
+	UNION ALL SELECT unnest(generate_series(TIMESTAMPTZ '2011-12-28 00:00:00+00', TIMESTAMPTZ '2012-01-01 00:00:00+00', INTERVAL '29 minutes'))
+	UNION ALL SELECT unnest(generate_series(TIMESTAMPTZ '2024-03-09 00:00:00+00', TIMESTAMPTZ '2024-03-12 00:00:00+00', INTERVAL '13 minutes'))
+	UNION ALL SELECT unnest(generate_series(TIMESTAMPTZ '2024-04-06 00:00:00+00', TIMESTAMPTZ '2024-04-08 00:00:00+00', INTERVAL '7 minutes'))
+	UNION ALL SELECT unnest(generate_series(TIMESTAMPTZ '2024-10-05 00:00:00+00', TIMESTAMPTZ '2024-10-07 00:00:00+00', INTERVAL '7 minutes'))
+	UNION ALL SELECT unnest(generate_series(TIMESTAMPTZ '2024-11-02 00:00:00+00', TIMESTAMPTZ '2024-11-05 00:00:00+00', INTERVAL '13 minutes'))
+	UNION ALL SELECT unnest([
+		TIMESTAMPTZ '0001-01-01 00:00:00+00',
+		TIMESTAMPTZ '0001-01-01 12:00:00+00',
+		TIMESTAMPTZ '0044-03-15 (BC) 10:33:41.987654+00',
+		TIMESTAMPTZ '0500-06-15 23:59:59.999+00',
+		TIMESTAMPTZ '0999-12-31 23:30:00+00',
+		TIMESTAMPTZ '1000-01-01 00:00:00+00',
+		TIMESTAMPTZ '1582-10-04 12:00:00+00',
+		TIMESTAMPTZ '1582-10-15 12:00:00+00',
+		TIMESTAMPTZ '1969-12-31 23:59:59.999999+00',
+		TIMESTAMPTZ '1970-01-01 00:00:00.000001+00',
+		TIMESTAMPTZ '9999-12-31 12:00:00+00',
+		TIMESTAMPTZ '9999-12-31 23:59:59.999999+00',
+		TIMESTAMPTZ '10000-01-01 00:00:00+00',
+		TIMESTAMPTZ '20000-06-15 08:45:30.5+00',
+		TIMESTAMPTZ '290000-01-01 00:00:00+00',
+		NULL,
+		'infinity'::TIMESTAMPTZ,
+		'-infinity'::TIMESTAMPTZ
+	])
+)
+
+foreach zone UTC Asia/Kolkata America/St_Johns Australia/Lord_Howe Pacific/Apia America/Los_Angeles
+
+statement ok
+SET TimeZone = '{zone}';
+
+query I
+SELECT count(*) FROM ts, parts
+WHERE CASE p
+	WHEN 'year' THEN year(t)
+	WHEN 'month' THEN month(t)
+	WHEN 'day' THEN day(t)
+	WHEN 'hour' THEN hour(t)
+	WHEN 'minute' THEN minute(t)
+	ELSE second(t) END IS DISTINCT FROM date_part(p, t)
+----
+0
+
+query I
+SELECT count(*) FROM ts, parts
+WHERE CASE p
+	WHEN 'year' THEN date_part('year', t)
+	WHEN 'month' THEN extract(month FROM t)
+	WHEN 'day' THEN date_part('day', t)
+	WHEN 'hour' THEN extract(hour FROM t)
+	WHEN 'minute' THEN date_part('minute', t)
+	ELSE extract(second FROM t) END IS DISTINCT FROM date_part(p, t)
+----
+0
+
+endloop
+
+statement ok
+SET TimeZone = 'Asia/Kolkata';
+
+query IIIIII
+SELECT year(t), month(t), day(t), hour(t), minute(t), second(t) FROM (SELECT TIMESTAMPTZ '2024-12-31 18:29:59+00' AS t)
+----
+2024	12	31	23	59	59
+
+statement ok
+SET TimeZone = 'America/St_Johns';
+
+query IIII
+SELECT day(t), hour(t), minute(t), second(t) FROM (SELECT TIMESTAMPTZ '2024-03-10 05:29:30+00' AS t UNION ALL SELECT TIMESTAMPTZ '2024-03-10 05:30:30+00') ORDER BY t
+----
+10	1	59	30
+10	3	0	30
+
+statement ok
+SET TimeZone = 'Australia/Lord_Howe';
+
+query III
+SELECT day(t), hour(t), minute(t) FROM (SELECT TIMESTAMPTZ '2024-04-06 14:45:00+00' AS t UNION ALL SELECT TIMESTAMPTZ '2024-04-06 15:15:00+00') ORDER BY t
+----
+7	1	45
+7	1	45
+
+statement ok
+SET TimeZone = 'Pacific/Apia';
+
+query III
+SELECT year(t), month(t), day(t) FROM (SELECT TIMESTAMPTZ '2011-12-30 09:59:59+00' AS t UNION ALL SELECT TIMESTAMPTZ '2011-12-30 10:00:00+00') ORDER BY t
+----
+2011	12	29
+2011	12	31
+
+statement ok
+SET TimeZone = 'UTC';
+
+query IIII
+SELECT year(t), month(t), day(t), hour(t) FROM (SELECT TIMESTAMPTZ '0500-06-15 23:59:59.999+00' AS t UNION ALL SELECT TIMESTAMPTZ '20000-06-15 08:45:30.5+00') ORDER BY t
+----
+500	6	15	23
+20000	6	15	8
