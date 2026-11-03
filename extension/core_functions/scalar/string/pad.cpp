@@ -98,10 +98,44 @@ static string_t PadString(const string_t &str, const int32_t len, const string_t
 	return string_t(result.data(), UnsafeNumericCast<uint32_t>(result.size()));
 }
 
+static bool TryAsciiPadSizes(const string_t &str, const idx_t len, const string_t &pad, idx_t &copy_bytes,
+                             idx_t &pad_bytes) {
+	if (pad.GetSize() != 1 || static_cast<uint8_t>(pad.GetData()[0]) >= 0x80) {
+		return false;
+	}
+	auto data = str.GetData();
+	copy_bytes = MinValue<idx_t>(len, str.GetSize());
+	for (idx_t i = 0; i < copy_bytes; i++) {
+		if (static_cast<uint8_t>(data[i]) >= 0x80) {
+			return false;
+		}
+	}
+	pad_bytes = len - copy_bytes;
+	if (copy_bytes + pad_bytes > string_t::MAX_STRING_SIZE) {
+		return false;
+	}
+	return true;
+}
+
 struct LeftPadOperator {
 	static inline string_t Operation(const string_t &str, const int32_t len, const string_t &pad,
 	                                 vector<char> &result) {
 		return PadString<true>(str, len, pad, result, "LPAD");
+	}
+
+	static inline bool TryAsciiPad(Vector &result_vector, const string_t &str, const idx_t len, const string_t &pad,
+	                               string_t &out) {
+		idx_t copy_bytes;
+		idx_t pad_bytes;
+		if (!TryAsciiPadSizes(str, len, pad, copy_bytes, pad_bytes)) {
+			return false;
+		}
+		out = StringVector::EmptyString(result_vector, copy_bytes + pad_bytes);
+		auto out_data = out.GetDataWriteable();
+		memset(out_data, pad.GetData()[0], pad_bytes);
+		memcpy(out_data + pad_bytes, str.GetData(), copy_bytes);
+		out.Finalize();
+		return true;
 	}
 };
 
@@ -109,6 +143,21 @@ struct RightPadOperator {
 	static inline string_t Operation(const string_t &str, const int32_t len, const string_t &pad,
 	                                 vector<char> &result) {
 		return PadString<false>(str, len, pad, result, "RPAD");
+	}
+
+	static inline bool TryAsciiPad(Vector &result_vector, const string_t &str, const idx_t len, const string_t &pad,
+	                               string_t &out) {
+		idx_t copy_bytes;
+		idx_t pad_bytes;
+		if (!TryAsciiPadSizes(str, len, pad, copy_bytes, pad_bytes)) {
+			return false;
+		}
+		out = StringVector::EmptyString(result_vector, copy_bytes + pad_bytes);
+		auto out_data = out.GetDataWriteable();
+		memcpy(out_data, str.GetData(), copy_bytes);
+		memset(out_data + copy_bytes, pad.GetData()[0], pad_bytes);
+		out.Finalize();
+		return true;
 	}
 };
 
@@ -123,6 +172,10 @@ static void PadFunction(DataChunk &args, ExpressionState &state, Vector &result)
 	TernaryExecutor::Execute<string_t, int32_t, string_t, string_t>(
 	    str_vector, len_vector, pad_vector, result, [&](string_t str, int32_t len, string_t pad) {
 		    len = MaxValue<int32_t>(len, 0);
+		    string_t fast_result;
+		    if (OP::TryAsciiPad(result, str, UnsafeNumericCast<idx_t>(len), pad, fast_result)) {
+			    return fast_result;
+		    }
 		    return heap.AddString(OP::Operation(str, len, pad, buffer));
 	    });
 }

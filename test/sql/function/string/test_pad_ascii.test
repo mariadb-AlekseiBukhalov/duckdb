@@ -1,0 +1,70 @@
+# name: test/sql/function/string/test_pad_ascii.test
+# description: LPAD/RPAD with one ASCII pad byte match the general path
+# group: [string]
+
+statement ok
+CREATE TABLE s AS SELECT * FROM (VALUES
+	(1, 'abc'),
+	(2, ''),
+	(3, NULL),
+	(4, 'héllo'),
+	(5, '🦆x'),
+	(6, 'a' || chr(0) || 'b'),
+	(7, 'abcdefghijklmnopqrstuvwxyz'),
+	(8, 'x')
+) t(id, v)
+
+statement ok
+CREATE TABLE n AS SELECT * FROM (VALUES (-1), (0), (1), (2), (3), (5), (13), (40), (NULL)) t(len)
+
+query I
+SELECT count(*) FROM s, n, (VALUES ('*'), ('0'), (' '), (chr(0))) p(pad)
+WHERE lpad(v, len, pad) IS DISTINCT FROM lpad(v, len, pad || pad)
+   OR rpad(v, len, pad) IS DISTINCT FROM rpad(v, len, pad || pad)
+----
+0
+
+query IIIIII
+SELECT lpad('abc', 6, '*'), rpad('abc', 6, '*'), lpad('abcdef', 3, '*'), rpad('abcdef', 3, '*'), lpad('abc', -1, '*'), rpad('', 2, '-')
+----
+***abc	abc***	abc	abc	(empty)	--
+
+query IIII
+SELECT lpad(NULL, 5, '*'), rpad('abc', NULL, '*'), lpad('abc', 5, NULL), rpad(v, 4, '*') FROM s WHERE id = 3
+----
+NULL	NULL	NULL	NULL
+
+query IIII
+SELECT lpad('héllo', 7, '*'), rpad('héllo', 3, '*'), lpad('🦆x', 4, '-'), rpad('🦆x', 1, '-')
+----
+**héllo	hél	--🦆x	🦆
+
+query II
+SELECT strlen(lpad('a' || chr(0) || 'b', 6, '*')), lpad('a' || chr(0) || 'b', 5, '*') = '**a' || chr(0) || 'b'
+----
+6	true
+
+query II
+SELECT rpad('a' || chr(0) || 'b', 2, '*') = 'a' || chr(0), rpad('ab', 4, chr(0)) = 'ab' || chr(0) || chr(0)
+----
+true	true
+
+query II
+SELECT lpad('abc', 2, ''), rpad('abc', 3, '')
+----
+ab	abc
+
+statement error
+SELECT lpad('abc', 4, '')
+----
+Insufficient padding in LPAD
+
+statement error
+SELECT rpad(v, 4, '') FROM s WHERE id = 1
+----
+Insufficient padding in RPAD
+
+query I
+SELECT list(lpad(v, 4, '.') ORDER BY id) FROM s WHERE id IN (1, 2, 7, 8)
+----
+[.abc, ...., abcd, ...x]
