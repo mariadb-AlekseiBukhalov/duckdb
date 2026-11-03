@@ -156,7 +156,8 @@ void DictFSSTSelect(ColumnSegment &segment, ColumnScanState &state, idx_t vector
 	D_ASSERT(sel_count <= vector_count);
 	D_ASSERT(sel_count == 0 || sel.get_index(sel_count - 1) < vector_count);
 	auto &scan_state = state.scan_state->Cast<CompressedStringScanState>();
-	if (scan_state.layout.mode != DictFSSTMode::FSST_ONLY && scan_type == ScanVectorType::SCAN_ENTIRE_VECTOR) {
+	if (scan_state.layout.mode != DictFSSTMode::FSST_ONLY && scan_type == ScanVectorType::SCAN_ENTIRE_VECTOR &&
+	    !scan_state.PreferSparseDecode(state.GetPositionInSegment(), vector_count, sel_count)) {
 		// scan + slice, so that we can emit a dictionary vector
 		DictFSSTCompressionStorage::StringScan(segment, state, vector_count, result);
 		result.Slice(sel, sel_count);
@@ -174,6 +175,14 @@ static void DictFSSTFilter(ColumnSegment &segment, ColumnScanState &state, idx_t
 	D_ASSERT(sel_count <= vector_count);
 	auto &scan_state = state.scan_state->Cast<CompressedStringScanState>();
 	auto start = state.GetPositionInSegment();
+	if (scan_state.TryFilterSubstring(start, vector_count, result, sel, sel_count, filter)) {
+		return;
+	}
+	if (scan_state.PreferSparseDecode(start, vector_count, sel_count)) {
+		scan_state.SparseDecodeByRow(result, start, vector_count, sel, sel_count);
+		ColumnSegment::FilterSelection(sel, result, filter_state, vector_count, sel_count);
+		return;
+	}
 	if (scan_state.AllowDictionaryScan(vector_count)) {
 		// only pushdown filters on dictionaries
 		if (!scan_state.filter_result) {

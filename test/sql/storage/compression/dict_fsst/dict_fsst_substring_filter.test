@@ -1,0 +1,67 @@
+# name: test/sql/storage/compression/dict_fsst/dict_fsst_substring_filter.test
+# description: contains, LIKE and NOT LIKE over DICT_FSST strings agree with uncompressed strings
+# group: [dict_fsst]
+
+load {TEST_DIR}/dict_fsst_substring_filter.db readwrite v2.0.0
+
+statement ok
+PRAGMA force_compression='dict_fsst'
+
+statement ok
+CREATE TABLE t AS
+SELECT i,
+       CASE WHEN i % 11 = 0 THEN NULL
+            WHEN i % 13 = 0 THEN ''
+            ELSE 'http://www.example' || (hash(i) % 4000)::VARCHAR || '.com/path' || (i % 97)::VARCHAR || CASE WHEN i % 5 = 0 THEN '/google/search' ELSE '/index' END END AS s
+FROM range(0, 400000) r(i)
+
+statement ok
+CHECKPOINT
+
+statement ok
+PRAGMA force_compression='uncompressed'
+
+statement ok
+CREATE TABLE u AS SELECT * FROM t
+
+statement ok
+CHECKPOINT
+
+query I
+SELECT count(*) > 0 FROM pragma_storage_info('t') WHERE column_name = 's' AND segment_type = 'VARCHAR' AND compression = 'DICT_FSST'
+----
+true
+
+query I
+SELECT count(*) FROM pragma_storage_info('u') WHERE column_name = 's' AND segment_type = 'VARCHAR' AND compression = 'DICT_FSST'
+----
+0
+
+foreach needle goo google example12 ex zzz x
+
+query I
+SELECT (SELECT count(*) || ':' || coalesce(sum(i), 0) FROM t WHERE s LIKE '%{needle}%') = (SELECT count(*) || ':' || coalesce(sum(i), 0) FROM u WHERE s LIKE '%{needle}%')
+----
+true
+
+query I
+SELECT (SELECT count(*) || ':' || coalesce(sum(i), 0) FROM t WHERE s NOT LIKE '%{needle}%') = (SELECT count(*) || ':' || coalesce(sum(i), 0) FROM u WHERE s NOT LIKE '%{needle}%')
+----
+true
+
+query I
+SELECT (SELECT count(*) || ':' || coalesce(sum(i), 0) FROM t WHERE contains(s, '{needle}') AND i % 7 = 0) = (SELECT count(*) || ':' || coalesce(sum(i), 0) FROM u WHERE contains(s, '{needle}') AND i % 7 = 0)
+----
+true
+
+query I
+SELECT (SELECT count(*) || ':' || coalesce(sum(i), 0) FROM t WHERE s LIKE '%{needle}%' AND i % 1000 = 3) = (SELECT count(*) || ':' || coalesce(sum(i), 0) FROM u WHERE s LIKE '%{needle}%' AND i % 1000 = 3)
+----
+true
+
+query I
+SELECT (SELECT string_agg(s, ',' ORDER BY i) FROM t WHERE s LIKE '%{needle}%' AND i < 3000) IS NOT DISTINCT FROM (SELECT string_agg(s, ',' ORDER BY i) FROM u WHERE s LIKE '%{needle}%' AND i < 3000)
+----
+true
+
+endloop

@@ -257,6 +257,9 @@ protected:
 	                  idx_t sel_count, ScanVectorType scan_type, idx_t result_offset = 0);
 	void FilterVector(ColumnScanState &state, Vector &result, idx_t target_count, SelectionVector &sel,
 	                  idx_t &sel_count, const TableFilter &filter, TableFilterState &filter_state);
+	bool CanFilterVectorPiecewise(ColumnScanState &state, idx_t target_count);
+	void FilterVectorPiecewise(ColumnScanState &state, Vector &result, idx_t target_count, SelectionVector &sel,
+	                           idx_t &sel_count, const TableFilter &filter, TableFilterState &filter_state);
 
 	void FetchUpdates(TransactionData transaction, idx_t vector_index, Vector &result, idx_t scan_count,
 	                  UpdateScanType update_type);

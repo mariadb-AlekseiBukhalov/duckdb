@@ -1,4 +1,5 @@
 #include "duckdb/storage/table/standard_column_data.hpp"
+#include "duckdb/storage/compression/dict_fsst/decompression.hpp"
 #include "duckdb/storage/table/scan_state.hpp"
 #include "duckdb/storage/table/update_segment.hpp"
 #include "duckdb/storage/table/append_state.hpp"
@@ -73,6 +74,12 @@ idx_t StandardColumnData::ScanCount(ColumnScanState &state, Vector &result, idx_
 	return scan_count;
 }
 
+static bool IsSubstringFilter(const TableFilter &filter) {
+	string needle;
+	bool negate;
+	return dict_fsst::ParseSubstringFilter(filter, needle, negate);
+}
+
 void StandardColumnData::Filter(TransactionData transaction, idx_t vector_index, ColumnScanState &state, Vector &result,
                                 SelectionVector &sel, idx_t &count, const TableFilter &filter,
                                 TableFilterState &filter_state) {
@@ -87,6 +94,13 @@ void StandardColumnData::Filter(TransactionData transaction, idx_t vector_index,
 	auto scan_type = GetVectorScanType(state, target_count, result);
 	bool scan_entire_vector = scan_type == ScanVectorType::SCAN_ENTIRE_VECTOR;
 	bool verify_fetch_row = state.scan_options && state.scan_options->force_fetch_row;
+	if (!scan_entire_vector && !verify_fetch_row && !filter_state.can_throw && filter_includes_validity &&
+	    !HasUpdates() && !validity->HasUpdates() && CanFilterVectorPiecewise(state, target_count) &&
+	    (count * 2 <= target_count || IsSubstringFilter(filter))) {
+		FilterVectorPiecewise(state, result, target_count, sel, count, filter, filter_state);
+		validity->Skip(state.child_states[0], target_count);
+		return;
+	}
 	if (!has_filter || !validity_has_filter || !scan_entire_vector || verify_fetch_row || filter_state.can_throw) {
 		// we are not scanning an entire vector - this can have several causes (updates, etc)
 		// a filter that can throw is excluded as well: the compression-level filters evaluate it over the distinct

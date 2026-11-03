@@ -339,6 +339,94 @@ void ColumnData::FilterVector(ColumnScanState &state, Vector &result, idx_t targ
 	state.internal_index = state.offset_in_column;
 }
 
+bool ColumnData::CanFilterVectorPiecewise(ColumnScanState &state, idx_t target_count) {
+	auto node = state.current;
+	idx_t position = state.offset_in_column;
+	idx_t remaining = target_count;
+	while (remaining > 0) {
+		if (!node) {
+			return false;
+		}
+		auto &segment = node->GetNode();
+		auto &function = segment.GetCompressionFunction();
+		if (function.type != CompressionType::COMPRESSION_DICT_FSST || !function.filter) {
+			return false;
+		}
+		const idx_t available = node->GetRowStart() + segment.count - position;
+		const idx_t taken = MinValue<idx_t>(remaining, available);
+		remaining -= taken;
+		position += taken;
+		if (remaining > 0) {
+			node = data.GetNextSegment(*node);
+		}
+	}
+	return true;
+}
+
+void ColumnData::FilterVectorPiecewise(ColumnScanState &state, Vector &result, idx_t target_count, SelectionVector &sel,
+                                       idx_t &sel_count, const TableFilter &filter, TableFilterState &filter_state) {
+	BeginScanVectorInternal(state);
+	SelectionVector survivors(target_count);
+	SelectionVector compact_index(target_count);
+	for (idx_t i = 0; i < target_count; i++) {
+		compact_index.set_index(i, 0);
+	}
+	FlatVector::SetSize(result, target_count);
+	idx_t scanned_count = 0;
+	idx_t sel_offset = 0;
+	idx_t survivor_count = 0;
+	idx_t segment_internal_index = state.offset_in_column;
+	while (scanned_count < target_count) {
+		auto &current = state.current->GetNode();
+		auto current_start = state.current->GetRowStart();
+		const idx_t piece_rows =
+		    MinValue<idx_t>(target_count - scanned_count, current_start + current.count - state.offset_in_column);
+		segment_internal_index = state.offset_in_column;
+		idx_t piece_selected = 0;
+		SelectionVector piece_sel(STANDARD_VECTOR_SIZE);
+		while (sel_offset + piece_selected < sel_count &&
+		       sel.get_index(sel_offset + piece_selected) < scanned_count + piece_rows) {
+			piece_sel.set_index(piece_selected, sel.get_index(sel_offset + piece_selected) - scanned_count);
+			piece_selected++;
+		}
+		if (piece_selected > 0) {
+			Vector piece_result(result.GetType());
+			idx_t piece_count = piece_selected;
+			current.Filter(state, piece_rows, piece_result, piece_sel, piece_count, filter, filter_state);
+			for (idx_t i = 0; i < piece_count; i++) {
+				const idx_t row = scanned_count + piece_sel.get_index(i);
+				survivors.set_index(survivor_count + i, row);
+				compact_index.set_index(row, survivor_count + i);
+			}
+			if (piece_count > 0) {
+				VectorOperations::Copy(piece_result, result, piece_sel, piece_count, 0, survivor_count);
+			}
+			survivor_count += piece_count;
+			segment_internal_index = state.offset_in_column + piece_rows;
+		}
+		sel_offset += piece_selected;
+		scanned_count += piece_rows;
+		state.offset_in_column += piece_rows;
+		if (scanned_count < target_count) {
+			auto next = data.GetNextSegment(*state.current);
+			if (!next) {
+				break;
+			}
+			state.previous_states.emplace_back(std::move(state.scan_state));
+			state.current = next;
+			state.current->GetNode().InitializeScan(state);
+			state.segment_checked = false;
+		}
+	}
+	state.internal_index = segment_internal_index;
+	sel.Initialize(survivors);
+	sel_count = survivor_count;
+	if (survivor_count == 0) {
+		FlatVector::SetNull(result, 0, true);
+	}
+	result.Slice(compact_index, target_count);
+}
+
 unique_ptr<BaseStatistics> ColumnData::GetUpdateStatistics() {
 	lock_guard<mutex> update_guard(update_lock);
 	return updates ? updates->GetStatistics() : nullptr;

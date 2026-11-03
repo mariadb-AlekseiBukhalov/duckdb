@@ -12,6 +12,8 @@ class DictionaryEntry;
 
 namespace dict_fsst {
 
+bool ParseSubstringFilter(const TableFilter &filter, string &needle, bool &negate);
+
 //===--------------------------------------------------------------------===//
 // Scan
 //===--------------------------------------------------------------------===//
@@ -57,6 +59,14 @@ public:
 
 	bool AllowDictionaryScan(idx_t scan_count);
 
+	bool DictionaryPending() const {
+		return layout.mode == DictFSSTMode::DICT_FSST && !dictionary;
+	}
+	bool PreferSparseDecode(idx_t start, idx_t scan_count, idx_t sel_count);
+	void SparseDecodeByRow(Vector &result, idx_t start, idx_t scan_count, const SelectionVector &sel, idx_t sel_count);
+	bool TryFilterSubstring(idx_t start, idx_t scan_count, Vector &result, SelectionVector &sel, idx_t &sel_count,
+	                        const TableFilter &filter);
+
 private:
 	static SegmentLayout ReadLayout(const BufferHandle &handle, const ColumnSegment &segment);
 	//! With COPY_STRINGS the string is owned by the result instead of pointing into the block
@@ -64,6 +74,11 @@ private:
 	                             StringScanType string_scan_type = StringScanType::STANDARD);
 	//! Builds the dictionary on first use, returns false if this scan has no dictionary
 	bool EnsureDictionary();
+	void DecompressDictionary(Vector &dict_data, string_t *dict_child_data);
+	void EnsureStringOffsets();
+	bool PrepareSubstringFilter(const TableFilter &filter);
+	void BuildSubstringTable();
+	void MatchSubstringEntries(const uint32_t *entries, idx_t count);
 	//! A string's offset from a running sum, restarted on a step back if allowed and cheap, else from all offsets
 	uint32_t GetStringOffset(idx_t string_number, bool allow_restart);
 	//! Unpacks the length of every string, which scans need; a few fetched strings only unpack the groups they use
@@ -97,6 +112,15 @@ public:
 	buffer_ptr<DictionaryEntry> dictionary;
 	void *decoder = nullptr;
 	bool all_values_inlined = false;
+
+	int8_t substring_filter_state = -1;
+	bool substring_negate = false;
+	string substring_needle;
+	vector<uint16_t> substring_table;
+	uint32_t substring_accept = 0;
+	uint32_t substring_escape_start = 0;
+	vector<uint8_t> substring_entry_state;
+	vector<uint32_t> substring_todo;
 
 	unsafe_unique_array<bool> filter_result;
 	bool null_filter_result_initialized = false;
