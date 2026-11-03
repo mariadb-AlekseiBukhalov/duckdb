@@ -11,6 +11,7 @@
 #include "duckdb/execution/radix_partitioned_hashtable.hpp"
 #include "duckdb/execution/aggregate_hashtable.hpp"
 #include "duckdb/execution/aggregate_state_spilling.hpp"
+#include "duckdb/execution/radix_ht_fast_int.hpp"
 #include "duckdb/storage/temporary_memory_manager.hpp"
 
 namespace duckdb {
@@ -90,7 +91,8 @@ public:
 
 class RadixHTGlobalSinkState : public GlobalSinkState {
 public:
-	RadixHTGlobalSinkState(ClientContext &context, const RadixPartitionedHashTable &radix_ht);
+	RadixHTGlobalSinkState(ClientContext &context, const RadixPartitionedHashTable &radix_ht,
+	                       idx_t estimated_input_rows = 0, idx_t estimated_groups = 0);
 
 	//! Destroys aggregate states (if multi-scan)
 	~RadixHTGlobalSinkState() override;
@@ -103,8 +105,16 @@ public:
 	void ResetConfigForNewIteration(ClientContext &context, idx_t scheduled_workers);
 
 public:
+	idx_t GetUsableReservation() const {
+		const auto reservation = temporary_memory_state->GetReservation();
+		if (!fast) {
+			return reservation;
+		}
+		const idx_t held = fast->total_bytes.load(std::memory_order_relaxed);
+		return reservation > held ? reservation - held : 0;
+	}
 	idx_t GetThreadLimit() const {
-		return temporary_memory_state->GetReservation() / number_of_threads / 10 * 8;
+		return GetUsableReservation() / number_of_threads / 10 * 8;
 	}
 	//! Whether the aggregate arena alone approaches the thread memory limit
 	bool StatePressureExceeded(GroupedAggregateHashTable &ht) const;
@@ -140,6 +150,7 @@ public:
 	unique_ptr<AggregateStateSpillPlan> spill_plan;
 	//! Config for partitioning
 	RadixHTConfig config;
+	unique_ptr<FastIntGlobalState> fast;
 
 	//! Uncombined partitioned data that will be put into the AggregatePartitions
 	unique_ptr<PartitionedTupleData> uncombined_data;
@@ -182,6 +193,7 @@ public:
 	bool spilling = false;
 	//! Sink capacity for this thread
 	idx_t local_sink_capacity;
+	unique_ptr<FastIntLocalSink> fast;
 	//! Data that is abandoned ends up here (only if we're doing external aggregation)
 	unique_ptr<PartitionedTupleData> abandoned_data;
 	//! Exported abandoned aggregate states, aligned one-to-one with the partitions of abandoned_data

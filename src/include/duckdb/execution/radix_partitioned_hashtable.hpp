@@ -19,6 +19,8 @@ class GlobalSinkState;
 class LocalSinkState;
 
 class GroupedAggregateHashTable;
+class RadixHTGlobalSinkState;
+class RadixHTLocalSinkState;
 struct AggregatePartition;
 
 class RadixPartitionedHashTable {
@@ -41,7 +43,8 @@ public:
 
 public:
 	//! Sink Interface
-	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const;
+	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context, idx_t estimated_input_rows = 0,
+	                                               idx_t estimated_groups = 0) const;
 	unique_ptr<LocalSinkState> GetLocalSinkState(ExecutionContext &context) const;
 	void ResetGlobalSinkState(ClientContext &context, GlobalSinkState &gstate, idx_t scheduled_workers) const;
 	//! Resizes the restart configuration to the actual worker count, if no data has flowed yet
@@ -50,6 +53,8 @@ public:
 
 	void Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input, DataChunk &aggregate_input_chunk,
 	          const unsafe_vector<idx_t> &filter) const;
+	void SinkInternal(ExecutionContext &context, RadixHTGlobalSinkState &gstate, RadixHTLocalSinkState &lstate,
+	                  DataChunk &payload_input, const unsafe_vector<idx_t> &filter) const;
 	void Combine(ExecutionContext &context, GlobalSinkState &gstate, LocalSinkState &lstate) const;
 	void Finalize(ClientContext &context, GlobalSinkState &gstate) const;
 

@@ -39,7 +39,8 @@ public:
 
 struct HashAggregateGroupingGlobalState {
 public:
-	HashAggregateGroupingGlobalState(const HashAggregateGroupingData &data, ClientContext &context);
+	HashAggregateGroupingGlobalState(const HashAggregateGroupingData &data, ClientContext &context,
+	                                 idx_t estimated_input_rows = 0, idx_t estimated_groups = 0);
 	// Radix state of the GROUPING_SET ht
 	unique_ptr<GlobalSinkState> table_state;
 	// State of the DISTINCT aggregates of this GROUPING_SET
@@ -93,6 +94,7 @@ public:
 	reference_map_t<const Expression, size_t> filter_indexes;
 
 	shared_ptr<DynamicFilterData> limit_filter;
+	idx_t estimated_group_count = 0;
 
 public:
 	// Source interface

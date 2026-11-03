@@ -1,0 +1,244 @@
+# name: test/sql/aggregate/group/fast_int_group_by.test_slow
+# description: partitioned fast path for high-cardinality single integer key GROUP BY returns exact results
+# group: [group]
+
+require vector_size 2048
+
+statement ok
+PRAGMA threads=4
+
+statement ok
+CREATE TABLE big AS SELECT
+  i::BIGINT AS i,
+  CASE WHEN i % 97 = 0 THEN NULL ELSE (hash(i) % 1000000)::BIGINT END AS k_bigint,
+  CASE WHEN i % 89 = 0 THEN NULL ELSE ((hash(i * 3) % 700000)::BIGINT - 350000)::INTEGER END AS k_int,
+  CASE WHEN i % 83 = 0 THEN NULL ELSE 9223372036854775808::UBIGINT + (hash(i * 5) % 900000)::UBIGINT END AS k_ubigint,
+  CASE WHEN i % 79 = 0 THEN NULL ELSE DATE '1970-01-01' + (hash(i * 7) % 600000)::INTEGER END AS k_date,
+  CASE WHEN i % 73 = 0 THEN NULL ELSE (4000000000 + (hash(i * 11) % 500000)::BIGINT)::UINTEGER END AS k_uint
+FROM range(5000000) t(i)
+
+query I
+SELECT count(*) FROM big
+----
+5000000
+
+foreach col k_bigint k_int k_ubigint k_date k_uint
+
+statement ok
+CREATE OR REPLACE TABLE ref AS SELECT {col} AS k, count(*) AS n, sum(i) AS s FROM big GROUP BY {col}
+
+query I
+SELECT count(*) > 131072 FROM ref
+----
+true
+
+query I
+SELECT sum(n) FROM ref
+----
+5000000
+
+query I
+SELECT count(*) FROM (SELECT {col} AS k, count(*) AS n FROM big GROUP BY {col} EXCEPT SELECT k, n FROM ref)
+----
+0
+
+query I
+SELECT count(*) FROM (SELECT k, n FROM ref EXCEPT SELECT {col} AS k, count(*) AS n FROM big GROUP BY {col})
+----
+0
+
+query I
+SELECT count(*) FROM (SELECT {col} AS k, count(*) AS n FROM big GROUP BY {col}) WHERE k IS NULL AND n = (SELECT count(*) FROM big WHERE {col} IS NULL)
+----
+1
+
+query I
+SELECT (SELECT count(*) FROM (SELECT {col} FROM big GROUP BY {col})) = (SELECT count(*) FROM ref)
+----
+true
+
+query I
+SELECT (SELECT count(DISTINCT {col}) FROM big) = (SELECT count(k) FROM ref)
+----
+true
+
+query I
+SELECT (SELECT count(*) FROM (SELECT DISTINCT {col} FROM big)) = (SELECT count(*) FROM ref)
+----
+true
+
+query I
+SELECT count(*) FROM (SELECT {col} AS k, count(DISTINCT {col}) AS d FROM big GROUP BY {col} EXCEPT SELECT k, CASE WHEN k IS NULL THEN 0 ELSE 1 END FROM ref)
+----
+0
+
+endloop
+
+statement ok
+CREATE TABLE runs AS SELECT (i // 5)::BIGINT AS k, i AS i FROM range(5000000) t(i)
+
+statement ok
+CREATE TABLE runs_ref AS SELECT k, count(*) AS n, sum(i) AS s FROM runs GROUP BY k
+
+query I
+SELECT count(*) FROM (SELECT k, count(*) AS n FROM runs GROUP BY k EXCEPT SELECT k, n FROM runs_ref)
+----
+0
+
+query I
+SELECT count(*) FROM (SELECT k, n FROM runs_ref EXCEPT SELECT k, count(*) AS n FROM runs GROUP BY k)
+----
+0
+
+query II
+SELECT count(*), min(n) FROM runs_ref
+----
+1000000	5
+
+statement ok
+CREATE TABLE skewed AS SELECT (CASE WHEN i % 2 = 0 THEN i % 10 ELSE 1000 + i END)::BIGINT AS k, i AS i FROM range(5000000) t(i)
+
+statement ok
+CREATE TABLE skewed_ref AS SELECT k, count(*) AS n, sum(i) AS s FROM skewed GROUP BY k
+
+query I
+SELECT count(*) FROM (SELECT k, count(*) AS n FROM skewed GROUP BY k EXCEPT SELECT k, n FROM skewed_ref)
+----
+0
+
+query I
+SELECT count(*) FROM (SELECT k, n FROM skewed_ref EXCEPT SELECT k, count(*) AS n FROM skewed GROUP BY k)
+----
+0
+
+query II
+SELECT count(*), sum(n) FROM skewed_ref
+----
+2500005	5000000
+
+statement ok
+CREATE TABLE shrunk AS SELECT i::BIGINT AS k, i AS i FROM range(5000000) t(i)
+
+statement ok
+DELETE FROM shrunk WHERE i % 1000 <> 0
+
+query II
+SELECT count(*), sum(n) FROM (SELECT k, count(*) AS n FROM shrunk GROUP BY k)
+----
+5000	5000
+
+statement ok
+UPDATE shrunk SET k = k % 3
+
+query III
+SELECT k, count(*), count(*) FILTER (WHERE true) FROM shrunk GROUP BY k ORDER BY k
+----
+0	1667	1667
+1	1667	1667
+2	1666	1666
+
+query I
+SELECT count(*) FROM (SELECT k FROM shrunk GROUP BY k)
+----
+3
+
+query I
+SELECT count(*) FROM (SELECT k FROM (SELECT (hash(i) % 1000000)::BIGINT AS k FROM range(5000000) t(i)) GROUP BY k)
+----
+993393
+
+statement ok
+CREATE TABLE expr_ref AS SELECT (hash(i) % 1000000)::BIGINT AS k, count(*) AS n, sum(i) AS s FROM range(5000000) t(i) GROUP BY ALL
+
+query I
+SELECT count(*) FROM (SELECT k, count(*) AS n FROM (SELECT (hash(i) % 1000000)::BIGINT AS k FROM range(5000000) t(i)) GROUP BY k EXCEPT SELECT k, n FROM expr_ref)
+----
+0
+
+statement ok
+SET temp_directory='{TEST_DIR}/fast_int_group_by_spill'
+
+statement ok
+SET memory_limit='100MB'
+
+foreach col k_bigint k_int k_ubigint k_date k_uint
+
+statement ok
+CREATE OR REPLACE TABLE ref AS SELECT {col} AS k, count(*) AS n, sum(i) AS s FROM big GROUP BY {col}
+
+query I
+SELECT sum(n) FROM ref
+----
+5000000
+
+query I
+SELECT count(*) FROM (SELECT {col} AS k, count(*) AS n FROM big GROUP BY {col} EXCEPT SELECT k, n FROM ref)
+----
+0
+
+query I
+SELECT count(*) FROM (SELECT k, n FROM ref EXCEPT SELECT {col} AS k, count(*) AS n FROM big GROUP BY {col})
+----
+0
+
+query I
+SELECT (SELECT count(DISTINCT {col}) FROM big) = (SELECT count(k) FROM ref)
+----
+true
+
+endloop
+
+statement ok
+SET memory_limit='10GB'
+
+statement ok
+CREATE OR REPLACE TABLE ref_unlimited AS SELECT k_bigint AS k, count(*) AS n FROM big GROUP BY k_bigint
+
+statement ok
+SET memory_limit='100MB'
+
+query I
+SELECT count(*) FROM (SELECT k_bigint AS k, count(*) AS n FROM big GROUP BY k_bigint EXCEPT SELECT k, n FROM ref_unlimited)
+----
+0
+
+foreach tbl runs skewed
+
+query I
+SELECT count(*) FROM (SELECT k, count(*) AS n FROM {tbl} GROUP BY k EXCEPT SELECT k, n FROM {tbl}_ref)
+----
+0
+
+query I
+SELECT count(*) FROM (SELECT k, n FROM {tbl}_ref EXCEPT SELECT k, count(*) AS n FROM {tbl} GROUP BY k)
+----
+0
+
+endloop
+
+statement ok
+SET memory_limit='10GB'
+
+statement ok
+ATTACH '{TEST_DIR}/fast_int_give_up.db' AS give_up
+
+statement ok
+CREATE TABLE give_up.p AS SELECT (TIMESTAMP '2000-01-01' + INTERVAL (hash(i) % 5000000) SECOND) AS ts FROM range(9000000) t(i)
+
+statement ok
+CHECKPOINT give_up
+
+statement ok
+SET threads=2
+
+foreach limit 120MB 220MB
+
+statement ok
+SET memory_limit='{limit}'
+
+query II
+SELECT count(*), sum(n) FROM (SELECT ts, count(*) n FROM give_up.p GROUP BY ts)
+----
+4174208	9000000
+
+endloop

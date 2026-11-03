@@ -40,8 +40,9 @@ bool HashAggregateGroupingData::HasDistinct() const {
 }
 
 HashAggregateGroupingGlobalState::HashAggregateGroupingGlobalState(const HashAggregateGroupingData &data,
-                                                                   ClientContext &context) {
-	table_state = data.table_data.GetGlobalSinkState(context);
+                                                                   ClientContext &context, idx_t estimated_input_rows,
+                                                                   idx_t estimated_groups) {
+	table_state = data.table_data.GetGlobalSinkState(context, estimated_input_rows, estimated_groups);
 	if (data.HasDistinct()) {
 		distinct_state = make_uniq<DistinctAggregateState>(*data.distinct_data, context);
 	}
@@ -197,7 +198,9 @@ public:
 		grouping_states.reserve(op.groupings.size());
 		for (idx_t i = 0; i < op.groupings.size(); i++) {
 			auto &grouping = op.groupings[i];
-			grouping_states.emplace_back(grouping, context);
+			grouping_states.emplace_back(grouping, context,
+			                             op.children.empty() ? 0 : op.children[0].get().estimated_cardinality,
+			                             op.estimated_group_count);
 		}
 		vector<LogicalType> filter_types;
 		for (auto &aggr : op.grouped_aggregate_data.aggregates) {
